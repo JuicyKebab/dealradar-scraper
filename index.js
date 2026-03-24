@@ -124,6 +124,29 @@ const STORE_URLS = {
   spar: "https://www.mijnspar.be/nl/promoties",
 };
 
+app.get("/sparjson", async (req, res) => {
+  try {
+    const apiUrl = "https://www.mijnspar.be/content/spar/nl/promoties/jcr:content/root/responsivegrid/responsivegrid/responsivegrid/filter_list_store_sp.model.json";
+    const r = await fetch(apiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.mijnspar.be/nl/promoties",
+      },
+    });
+    const data = await r.json();
+    const results = data.results || [];
+    res.json({
+      total: results.length,
+      firstItemKeys: results[0] ? Object.keys(results[0]) : [],
+      firstItem: results[0] || null,
+      secondItem: results[1] || null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/dump/:store", async (req, res) => {
   const url = STORE_URLS[req.params.store];
   if (!url) return res.status(404).json({ error: "Unknown store" });
