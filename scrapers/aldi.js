@@ -52,17 +52,17 @@ async function scrapeAldi(browser, maxResults = 15) {
 
       // Brede fallback: alle elementen met afbeelding en prijs
       if (cards.length === 0) {
-        const allEls = Array.from(document.querySelectorAll("article, li, div")).filter(el => {
+        const allEls = Array.from(document.querySelectorAll("article, li")).filter(el => {
           return el.querySelector("img") &&
-                 (el.textContent.includes("€") || el.textContent.includes(",")) &&
-                 el.offsetHeight > 50;
+                 el.textContent.includes("€") &&
+                 el.offsetHeight > 80 &&
+                 el.offsetWidth > 80;
         });
-        // Neem de kleinste elementen (leaf nodes met inhoud)
-        cards = allEls.filter(el => {
-          const parent = el.parentElement;
-          return !allEls.includes(parent);
-        }).slice(0, 30);
+        cards = allEls.filter(el => !allEls.includes(el.parentElement)).slice(0, 30);
       }
+
+      // Nav items te filteren
+      const NAV_BLACKLIST = ["boodschappenlijst", "aanmelden", "registreren", "zoeken", "menu", "home", "winkel", "contact"];
 
       for (const card of cards.slice(0, 25)) {
         const nameEl = card.querySelector(
@@ -70,6 +70,7 @@ async function scrapeAldi(browser, maxResults = 15) {
         );
         const name = nameEl?.textContent?.trim();
         if (!name || name.length < 3 || name.length > 100) continue;
+        if (NAV_BLACKLIST.some(b => name.toLowerCase().includes(b))) continue;
 
         const allText = card.textContent;
         const priceMatch = allText.match(/€\s*(\d+)[,.](\d{2})/);

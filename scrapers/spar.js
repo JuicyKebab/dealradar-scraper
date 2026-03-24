@@ -1,4 +1,4 @@
-// Spar Belgium (mijnspar.be) — Playwright scraper
+// Spar Belgium (mijnspar.be) — AEM JSON API + Playwright fallback
 const _DDAYS = ["zo", "ma", "di", "wo", "do", "vr", "za"];
 const _DMONTHS = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
 
@@ -8,148 +8,121 @@ function dutchDate(daysFromNow = 7) {
   return `${_DDAYS[d.getDay()]} ${d.getDate()} ${_DMONTHS[d.getMonth()]}`;
 }
 
+function isoToDutch(dateStr) {
+  if (!dateStr) return dutchDate(7);
+  const d = new Date(dateStr);
+  if (isNaN(d)) return dutchDate(7);
+  return `${_DDAYS[d.getDay()]} ${d.getDate()} ${_DMONTHS[d.getMonth()]}`;
+}
+
+function mapSparResult(p, i) {
+  const orig = p.price?.regular || p.regularPrice || p.originalPrice || 0;
+  const curr = p.price?.promo || p.promoPrice || p.salePrice || orig;
+  const savings = orig > curr ? Math.round((1 - curr / orig) * 100) : 0;
+
+  // AEM model structure uses different field names
+  const title = p.title || p.name || p.pageTitle || p.navigationTitle || "Onbekend";
+  const image = p.image?.path || p.imagePath || p.imageUrl
+    || (p.image?.renditions?.[0]?.path ? `https://www.mijnspar.be${p.image.renditions[0].path}` : null);
+  const badge = p.promotionLabel || p.label || p.badge || (savings > 0 ? `-${savings}%` : "Aanbieding");
+  const endDate = p.endDate || p.promotionEndDate || p.offTime || null;
+
+  return {
+    id: 8000 + i,
+    store: "Spar", storeColor: "#007A33", storeLogo: "S",
+    item: title,
+    deal: badge,
+    category: p.category || p.tags?.[0] || "Overig",
+    originalPrice: orig,
+    newPrice: curr,
+    savings,
+    emoji: "🛒",
+    validUntil: isoToDutch(endDate) || dutchDate(7),
+    hot: savings >= 30,
+    description: p.description || p.jcr_description || "",
+    image,
+  };
+}
+
 async function scrapeSpar(browser, maxResults = 15) {
+  // Try direct AEM JSON API first (no browser needed)
+  try {
+    const apiUrl = "https://www.mijnspar.be/content/spar/nl/promoties/jcr:content/root/responsivegrid/responsivegrid/responsivegrid/filter_list_store_sp.model.json";
+    const res = await fetch(apiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.mijnspar.be/nl/promoties",
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const results = data.results || [];
+      if (results.length > 0) {
+        console.log("[Spar] AEM API works, got", results.length, "results. Keys:", Object.keys(results[0]).join(", "));
+        return results.slice(0, maxResults).map((p, i) => mapSparResult(p, i));
+      }
+    }
+  } catch (e) {
+    console.log("[Spar] AEM API failed:", e.message);
+  }
+
+  // Browser fallback with correct selectors
   const page = await browser.newPage();
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
-    const apiData = [];
+    // Intercept the AEM model JSON
+    let modelData = null;
     page.on("response", async (response) => {
-      const url = response.url();
-      if (url.includes("api") || url.includes("product") || url.includes("promo")) {
-        const ct = response.headers()["content-type"] || "";
-        if (ct.includes("application/json")) {
-          try {
-            const json = await response.json();
-            apiData.push({ url, json });
-          } catch { /* skip */ }
-        }
+      if (response.url().includes("filter_list_store_sp.model.json")) {
+        try {
+          const json = await response.json();
+          if (json.results?.length > 0) modelData = json;
+        } catch { /* skip */ }
       }
     });
 
     await page.goto("https://www.mijnspar.be/nl/promoties", { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForTimeout(4000);
 
-    // Check API intercepts
-    for (const { json } of apiData) {
-      const items = json.results || json.products || json.items || json.promotions || [];
-      if (items.length > 0) {
-        return items.slice(0, maxResults).map((p, i) => ({
-          id: 8000 + i,
-          store: "Spar", storeColor: "#007A33", storeLogo: "S",
-          item: p.name || p.title || "Onbekend",
-          deal: p.promotionText || p.discount || "Promo",
-          category: p.category || "Overig",
-          originalPrice: p.regularPrice || p.originalPrice || 0,
-          newPrice: p.price || p.salePrice || 0,
-          savings: 0,
-          emoji: "🛒",
-          validUntil: dutchDate(7),
-          hot: false,
-          description: p.description || "",
-          image: p.image || p.imageUrl || null,
-        }));
-      }
+    if (modelData) {
+      console.log("[Spar] Got model data via intercept:", modelData.results.length, "items");
+      return modelData.results.slice(0, maxResults).map((p, i) => mapSparResult(p, i));
     }
 
-    // Debug: dump page structure to find correct selectors
-    const pageInfo = await page.evaluate(() => {
-      // Find all elements that look like product cards
+    // HTML scraping with confirmed selectors from dump
+    const products = await page.evaluate(() => {
       const results = [];
-      const allEls = Array.from(document.querySelectorAll("*"));
+      const cards = Array.from(document.querySelectorAll(".card--promotion, .card.card--promotion"));
 
-      // Find classes that appear multiple times (likely list items)
-      const classCounts = {};
-      for (const el of allEls) {
-        for (const cls of el.classList) {
-          classCounts[cls] = (classCounts[cls] || 0) + 1;
-        }
-      }
+      for (const card of cards.slice(0, 25)) {
+        const title = card.querySelector(".card__title")?.textContent?.trim();
+        if (!title || title.length < 2) continue;
 
-      // Classes appearing 5-50 times are likely product cards
-      const candidates = Object.entries(classCounts)
-        .filter(([, count]) => count >= 5 && count <= 50)
-        .map(([cls]) => cls);
+        const label = card.querySelector(".card__label")?.textContent?.trim() || "";
+        const image = card.querySelector(".card__image img, .lazyload")?.getAttribute("src")
+          || card.querySelector(".card__image img, .lazyload")?.getAttribute("data-src")
+          || card.querySelector("img")?.src || null;
 
-      // Try each candidate as a product card selector
-      for (const cls of candidates.slice(0, 20)) {
-        const els = document.querySelectorAll(`.${cls}`);
-        if (els.length < 4) continue;
-        const sample = els[0];
-        const text = sample?.textContent?.trim().slice(0, 100);
-        const hasImg = !!sample?.querySelector("img");
-        const hasPrice = text?.includes("€") || text?.includes(",");
-        if (hasImg && hasPrice) {
-          results.push({ cls, count: els.length, text });
-        }
+        const dateEl = card.querySelector(".price-info__date");
+        const dateText = dateEl?.textContent?.trim() || "";
+
+        // Price: look for any price element
+        const priceText = card.querySelector("[class*='price']:not(.price-info__date)")?.textContent || card.textContent;
+        const priceMatch = priceText.match(/€\s*(\d+)[,.](\d{2})/);
+        const newPrice = priceMatch ? parseFloat(`${priceMatch[1]}.${priceMatch[2]}`) : 0;
+
+        const oldEl = card.querySelector("s, del, [class*='before'], [class*='was']");
+        const oldMatch = oldEl?.textContent?.match(/(\d+)[,.](\d{2})/);
+        const originalPrice = oldMatch ? parseFloat(`${oldMatch[1]}.${oldMatch[2]}`) : newPrice;
+
+        results.push({ title, label, image, newPrice, originalPrice, dateText });
       }
       return results;
     });
 
-    console.log("[Spar] Page structure:", JSON.stringify(pageInfo.slice(0, 5)));
-
-    // Try to scrape based on discovered structure
-    const products = await page.evaluate((pageInfo) => {
-      const results = [];
-
-      // Try discovered classes first
-      for (const { cls } of pageInfo) {
-        const cards = Array.from(document.querySelectorAll(`.${cls}`));
-        if (cards.length < 4) continue;
-
-        for (const card of cards.slice(0, 25)) {
-          // Try to find name: any text element that's not a price
-          const textEls = Array.from(card.querySelectorAll("p, span, h2, h3, h4, strong, a"));
-          let name = null;
-          for (const el of textEls) {
-            const text = el.textContent?.trim();
-            if (text && text.length > 2 && text.length < 80 && !text.includes("€") && !/^\d/.test(text)) {
-              name = text;
-              break;
-            }
-          }
-          if (!name) continue;
-
-          const allText = card.textContent;
-          const priceMatch = allText.match(/€\s*(\d+)[,.](\d{2})/);
-          const newPrice = priceMatch ? parseFloat(`${priceMatch[1]}.${priceMatch[2]}`) : 0;
-
-          const oldEl = card.querySelector("s, del, [class*='before'], [class*='old'], [class*='was']");
-          const oldMatch = oldEl?.textContent?.match(/(\d+)[,.](\d{2})/);
-          const originalPrice = oldMatch ? parseFloat(`${oldMatch[1]}.${oldMatch[2]}`) : newPrice;
-
-          const image = card.querySelector("img")?.src || null;
-          const badge = card.querySelector("[class*='badge'], [class*='discount'], [class*='promo'], [class*='label']")?.textContent?.trim() || "";
-          results.push({ name, newPrice, originalPrice, badge, image });
-        }
-        if (results.length > 0) break;
-      }
-
-      // Generic fallback
-      if (results.length === 0) {
-        const cards = Array.from(document.querySelectorAll("article, li")).filter(el =>
-          el.querySelector("img") && el.textContent.includes("€") && el.offsetHeight > 80
-        );
-        for (const card of cards.slice(0, 25)) {
-          const textEls = Array.from(card.querySelectorAll("p, span, h2, h3, h4, strong"));
-          let name = null;
-          for (const el of textEls) {
-            const text = el.textContent?.trim();
-            if (text && text.length > 2 && text.length < 80 && !text.includes("€") && !/^\d/.test(text)) {
-              name = text;
-              break;
-            }
-          }
-          if (!name) continue;
-          const priceMatch = card.textContent.match(/€\s*(\d+)[,.](\d{2})/);
-          const newPrice = priceMatch ? parseFloat(`${priceMatch[1]}.${priceMatch[2]}`) : 0;
-          const image = card.querySelector("img")?.src || null;
-          results.push({ name, newPrice, originalPrice: newPrice, badge: "", image });
-        }
-      }
-
-      return results;
-    }, pageInfo);
+    console.log("[Spar] HTML scraping found:", products.length, "products");
 
     return products.slice(0, maxResults).map((p, i) => {
       const savings = p.originalPrice > p.newPrice && p.newPrice > 0
@@ -157,14 +130,14 @@ async function scrapeSpar(browser, maxResults = 15) {
       return {
         id: 8000 + i,
         store: "Spar", storeColor: "#007A33", storeLogo: "S",
-        item: p.name,
-        deal: p.badge || (savings > 0 ? `-${savings}%` : "Aanbieding"),
+        item: p.title,
+        deal: p.label || (savings > 0 ? `-${savings}%` : "Aanbieding"),
         category: "Overig",
         originalPrice: p.originalPrice,
         newPrice: p.newPrice,
         savings,
         emoji: "🛒",
-        validUntil: dutchDate(7),
+        validUntil: p.dateText || dutchDate(7),
         hot: savings >= 30,
         description: "",
         image: p.image,
