@@ -2,7 +2,12 @@
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   "Accept-Language": "nl-BE,nl;q=0.9",
-  "Accept": "application/json",
+  "Accept": "application/json, text/plain, */*",
+  "Referer": "https://www.colruyt.be/",
+  "Origin": "https://www.colruyt.be",
+  "sec-fetch-dest": "empty",
+  "sec-fetch-mode": "cors",
+  "sec-fetch-site": "cross-site",
 };
 
 const _DDAYS = ["zo", "ma", "di", "wo", "do", "vr", "za"];

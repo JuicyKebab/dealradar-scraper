@@ -34,7 +34,6 @@ async function scrapeAll() {
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
-      "--single-process",
     ],
   });
 
@@ -123,7 +122,7 @@ app.get("/debug", async (req, res) => {
     const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
     browser = await chromium.launch({
       executablePath,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
     });
     results.browser = { ok: true, version: browser.version() };
   } catch (e) {
