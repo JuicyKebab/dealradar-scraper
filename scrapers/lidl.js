@@ -26,7 +26,7 @@ async function scrapeLidl(browser, maxResults = 15) {
   const page = await browser.newPage();
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
-    await page.goto("https://www.lidl.be/nl/aanbiedingen", { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.goto("https://www.lidl.be/nl/aanbiedingen", { waitUntil: "domcontentloaded", timeout: 60000 });
 
     // Wait for product tiles to load
     await page.waitForSelector('[class*="offer"], [class*="product"], [class*="tile"]', { timeout: 15000 }).catch(() => {});

@@ -13,69 +13,27 @@ async function scrapeAldi(browser, maxResults = 15) {
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
-    // Aldi Belgium promotions
-    await page.goto("https://www.aldi.be/nl/", { waitUntil: "domcontentloaded", timeout: 30000 });
-    await page.waitForTimeout(2000);
+    // Aldi Belgium - probeer directe URL's
+    const urls = [
+      "https://www.aldi.be/nl/weekaanbieding.html",
+      "https://www.aldi.be/nl/",
+    ];
 
-    // Try to navigate to aanbiedingen section
-    const offerLink = await page.$('[href*="aanbieding"], [href*="folder"], [href*="promo"]');
-    if (offerLink) {
-      await offerLink.click();
-      await page.waitForTimeout(2000);
-    }
-
-    // Look for embedded JSON data
-    const jsData = await page.evaluate(() => {
-      // Check for structured data
-      const scripts = Array.from(document.querySelectorAll("script[type='application/json'], script[type='application/ld+json']"));
-      for (const s of scripts) {
-        try {
-          const data = JSON.parse(s.textContent);
-          if (Array.isArray(data) && data.length > 0 && data[0].name) return JSON.stringify(data);
-          if (data["@type"] === "ItemList") return JSON.stringify(data);
-        } catch { /* skip */ }
-      }
-
-      // Check window data
-      for (const key of Object.keys(window)) {
-        if (key.includes("product") || key.includes("offer") || key.includes("promo")) {
-          try {
-            const val = window[key];
-            if (Array.isArray(val) && val.length > 0) return JSON.stringify(val);
-          } catch { /* skip */ }
-        }
-      }
-
-      return null;
-    });
-
-    if (jsData) {
+    let loaded = false;
+    for (const url of urls) {
       try {
-        const parsed = JSON.parse(jsData);
-        const items = Array.isArray(parsed) ? parsed : (parsed.itemListElement || []);
-        if (items.length > 0) {
-          return items.slice(0, maxResults).map((p, i) => ({
-            id: 7000 + i,
-            store: "Aldi", storeColor: "#1E5AA8", storeLogo: "AL",
-            item: p.name || p.item?.name || "Onbekend",
-            deal: "Aanbieding",
-            category: p.category || "Overig",
-            originalPrice: 0,
-            newPrice: parseFloat(p.offers?.price || p.price || 0),
-            savings: 0,
-            emoji: "🛒",
-            validUntil: dutchDate(7),
-            hot: false,
-            description: p.description || "",
-            image: p.image || null,
-          }));
-        }
-      } catch { /* continue */ }
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        loaded = true;
+        break;
+      } catch { /* try next */ }
     }
 
-    // HTML scraping
+    if (!loaded) throw new Error("Aldi: geen enkele URL geladen");
+    await page.waitForTimeout(3000);
+
     const products = await page.evaluate(() => {
       const results = [];
+      // Aldi Belgium uses specific tile components
       const selectors = [
         ".mod-article-tile",
         "[class*='article-tile']",
@@ -83,7 +41,7 @@ async function scrapeAldi(browser, maxResults = 15) {
         "[class*='offer-tile']",
         "[class*='OfferTile']",
         "[class*='ArticleTile']",
-        ".product-card",
+        "[class*='mod-article']",
       ];
 
       let cards = [];
@@ -92,24 +50,33 @@ async function scrapeAldi(browser, maxResults = 15) {
         if (cards.length > 2) break;
       }
 
-      // Fallback: any section/article with a price
+      // Brede fallback: alle elementen met afbeelding en prijs
       if (cards.length === 0) {
-        cards = Array.from(document.querySelectorAll("article, section, li")).filter(el => {
-          const text = el.textContent;
-          return text.includes("€") && el.querySelector("img");
+        const allEls = Array.from(document.querySelectorAll("article, li, div")).filter(el => {
+          return el.querySelector("img") &&
+                 (el.textContent.includes("€") || el.textContent.includes(",")) &&
+                 el.offsetHeight > 50;
         });
+        // Neem de kleinste elementen (leaf nodes met inhoud)
+        cards = allEls.filter(el => {
+          const parent = el.parentElement;
+          return !allEls.includes(parent);
+        }).slice(0, 30);
       }
 
       for (const card of cards.slice(0, 25)) {
-        const name = card.querySelector("[class*='title'], [class*='name'], h2, h3, h4, p")?.textContent?.trim();
-        if (!name || name.length < 3) continue;
+        const nameEl = card.querySelector(
+          ".mod-article-tile__name, [class*='title'], [class*='name'], [class*='heading'], h2, h3, h4, strong"
+        );
+        const name = nameEl?.textContent?.trim();
+        if (!name || name.length < 3 || name.length > 100) continue;
 
-        const priceText = card.querySelector("[class*='price'], .price")?.textContent || card.textContent || "";
-        const priceMatch = priceText.match(/€\s*(\d+)[,.](\d{2})/);
+        const allText = card.textContent;
+        const priceMatch = allText.match(/€\s*(\d+)[,.](\d{2})/);
         const newPrice = priceMatch ? parseFloat(`${priceMatch[1]}.${priceMatch[2]}`) : 0;
 
-        const oldPriceText = card.querySelector("[class*='price--before'], s, del, [class*='old']")?.textContent || "";
-        const oldMatch = oldPriceText.match(/(\d+)[,.](\d{2})/);
+        const oldEl = card.querySelector("s, del, [class*='before'], [class*='old'], [class*='was']");
+        const oldMatch = oldEl?.textContent?.match(/(\d+)[,.](\d{2})/);
         const originalPrice = oldMatch ? parseFloat(`${oldMatch[1]}.${oldMatch[2]}`) : newPrice;
 
         const image = card.querySelector("img")?.src || card.querySelector("img")?.getAttribute("data-src") || null;

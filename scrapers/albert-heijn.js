@@ -1,4 +1,4 @@
-// Albert Heijn Netherlands — JSON API (no browser needed)
+// Albert Heijn — Playwright scraper (browser-based als API blokkeert)
 const _DDAYS = ["zo", "ma", "di", "wo", "do", "vr", "za"];
 const _DMONTHS = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
 
@@ -20,7 +20,7 @@ function categoryToEmoji(cat) {
     "dranken": "🥤", "zuivel": "🥛", "vlees": "🥩", "brood": "🍞",
     "diepvries": "🧊", "groenten": "🥦", "fruit": "🍎", "koeken": "🍫",
     "chocolade": "🍫", "wijn": "🍷", "bier": "🍺", "snacks": "🍿",
-    "kaas": "🧀", "charcuterie": "🥓",
+    "kaas": "🧀",
   };
   if (!cat) return "🛒";
   const lower = cat.toLowerCase();
@@ -30,87 +30,92 @@ function categoryToEmoji(cat) {
   return "🛒";
 }
 
-let ahTokenCache = null;
-let ahTokenExpiry = 0;
+async function scrapeAlbertHeijn(browser, maxResults = 15) {
+  const page = await browser.newPage();
+  try {
+    const apiData = [];
+    page.on("response", async (response) => {
+      const url = response.url();
+      if (url.includes("api.ah.nl") || url.includes("bonus") || url.includes("promotion")) {
+        try {
+          const json = await response.json();
+          apiData.push({ url, json });
+        } catch { /* skip */ }
+      }
+    });
 
-async function getAHToken() {
-  if (ahTokenCache && Date.now() < ahTokenExpiry) return ahTokenCache;
-  const res = await fetch("https://api.ah.nl/mobile-auth/v1/auth/token/anonymous", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": "Appie/8.22.3 Model/phone Android/7.0",
-      "x-application": "AHWEBSHOP",
-    },
-    body: JSON.stringify({ clientId: "appie" }),
-  });
-  if (!res.ok) throw new Error(`AH auth failed: ${res.status}`);
-  const data = await res.json();
-  ahTokenCache = data.access_token;
-  ahTokenExpiry = Date.now() + (data.expires_in - 60) * 1000;
-  return ahTokenCache;
-}
+    await page.goto("https://www.ah.nl/bonus", { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForTimeout(5000);
 
-async function scrapeAlbertHeijn(maxResults = 15) {
-  const token = await getAHToken();
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "User-Agent": "Appie/8.22.3 Model/phone Android/7.0",
-    "x-application": "AHWEBSHOP",
-  };
-
-  // Try direct bonus list endpoint
-  const bonusRes = await fetch("https://api.ah.nl/mobile-services/bonuspage/v1/bonus", { headers });
-  if (bonusRes.ok) {
-    const data = await bonusRes.json();
-    const products = data.bonusGroups?.flatMap(g => g.products || []) || data.products || [];
-    if (products.length > 0) {
-      return products.slice(0, maxResults).map((p, i) => mapAHProduct(p, i));
+    // Check API intercepts
+    for (const { json } of apiData) {
+      const products = json.products || json.bonusGroups?.flatMap(g => g.products || []) || [];
+      if (products.length > 0) {
+        return products.slice(0, maxResults).map((p, i) => {
+          const currentPrice = p.currentPrice?.amount ?? p.priceLabel?.now ?? 0;
+          const previousPrice = p.priceBeforeBonus?.amount ?? p.priceLabel?.was ?? currentPrice;
+          const savings = previousPrice > currentPrice ? Math.round((1 - currentPrice / previousPrice) * 100) : 0;
+          return {
+            id: 3000 + i,
+            store: "Albert Heijn", storeColor: "#00A0E2", storeLogo: "AH",
+            item: p.title || p.name || "Onbekend",
+            deal: savings > 0 ? `-${savings}%` : (p.bonusMechanism || "Bonus"),
+            category: p.mainCategory || p.subCategory || "Overig",
+            originalPrice: previousPrice, newPrice: currentPrice, savings,
+            emoji: categoryToEmoji(p.mainCategory || p.subCategory),
+            validUntil: isoToDutch(p.bonusEndDate || p.endDate),
+            hot: savings >= 30,
+            description: p.descriptionFull || "",
+            image: p.images?.[0]?.url || null,
+          };
+        });
+      }
     }
+
+    // HTML scraping fallback
+    const products = await page.evaluate(() => {
+      const results = [];
+      const selectors = [
+        "[data-testhook='product-card']",
+        "[class*='product-card']",
+        "[class*='ProductCard']",
+        "[class*='BonusCard']",
+        "[class*='bonus-card']",
+      ];
+      let cards = [];
+      for (const sel of selectors) {
+        cards = Array.from(document.querySelectorAll(sel));
+        if (cards.length > 2) break;
+      }
+      for (const card of cards.slice(0, 25)) {
+        const name = card.querySelector("[class*='title'], [class*='name'], h2, h3, p")?.textContent?.trim();
+        if (!name || name.length < 3) continue;
+        const priceText = card.querySelector("[class*='price'], [class*='Price']")?.textContent || "";
+        const match = priceText.match(/(\d+)[,.](\d{2})/);
+        const newPrice = match ? parseFloat(`${match[1]}.${match[2]}`) : 0;
+        const image = card.querySelector("img")?.src || null;
+        const badge = card.querySelector("[class*='discount'], [class*='badge'], [class*='bonus']")?.textContent?.trim() || "Bonus";
+        results.push({ name, newPrice, badge, image });
+      }
+      return results;
+    });
+
+    return products.slice(0, maxResults).map((p, i) => ({
+      id: 3000 + i,
+      store: "Albert Heijn", storeColor: "#00A0E2", storeLogo: "AH",
+      item: p.name,
+      deal: p.badge || "Bonus",
+      category: "Overig",
+      originalPrice: p.newPrice, newPrice: p.newPrice, savings: 0,
+      emoji: "🛒",
+      validUntil: dutchDate(7),
+      hot: false,
+      description: "",
+      image: p.image,
+    }));
+  } finally {
+    await page.close();
   }
-
-  // Fallback: try segments via metadata
-  const metaRes = await fetch("https://api.ah.nl/mobile-services/bonuspage/v1/metadata", { headers });
-  if (!metaRes.ok) throw new Error(`AH metadata failed: ${metaRes.status}`);
-  const meta = await metaRes.json();
-
-  const today = new Date().toISOString().split("T")[0];
-  const segments = (meta.cortGroups || []).flatMap(g => g.segments || []).slice(0, 5);
-  const products = [];
-
-  for (const seg of segments) {
-    if (products.length >= maxResults) break;
-    try {
-      const segRes = await fetch(
-        `https://api.ah.nl/mobile-services/bonuspage/v1/segment?date=${today}&segmentId=${seg.id}`,
-        { headers }
-      );
-      if (!segRes.ok) continue;
-      const segData = await segRes.json();
-      products.push(...(segData.products || []));
-    } catch { /* skip */ }
-  }
-
-  return products.slice(0, maxResults).map((p, i) => mapAHProduct(p, i));
-}
-
-function mapAHProduct(p, i) {
-  const currentPrice = p.currentPrice?.amount ?? p.priceLabel?.now ?? 0;
-  const previousPrice = p.priceBeforeBonus?.amount ?? p.priceLabel?.was ?? currentPrice;
-  const savings = previousPrice > currentPrice ? Math.round((1 - currentPrice / previousPrice) * 100) : 0;
-  return {
-    id: 3000 + i,
-    store: "Albert Heijn", storeColor: "#00A0E2", storeLogo: "AH",
-    item: p.title || p.name || "Onbekend product",
-    deal: savings > 0 ? `-${savings}%` : (p.bonusMechanism || p.priceLabel?.signalWord || "Bonus"),
-    category: p.mainCategory || p.subCategory || "Overig",
-    originalPrice: previousPrice, newPrice: currentPrice, savings,
-    emoji: categoryToEmoji(p.mainCategory || p.subCategory),
-    validUntil: isoToDutch(p.bonusEndDate || p.endDate),
-    hot: savings >= 30,
-    description: p.descriptionFull || "",
-    image: p.images?.[0]?.url || null,
-  };
 }
 
 module.exports = { scrapeAlbertHeijn };

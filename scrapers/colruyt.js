@@ -1,15 +1,4 @@
-// Colruyt Group API (Colruyt + OKay) — JSON API, no browser needed
-const BROWSER_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Accept-Language": "nl-BE,nl;q=0.9",
-  "Accept": "application/json, text/plain, */*",
-  "Referer": "https://www.colruyt.be/",
-  "Origin": "https://www.colruyt.be",
-  "sec-fetch-dest": "empty",
-  "sec-fetch-mode": "cors",
-  "sec-fetch-site": "cross-site",
-};
-
+// Colruyt Belgium — Playwright scraper (browser-based omdat API geblokkeerd is op Railway)
 const _DDAYS = ["zo", "ma", "di", "wo", "do", "vr", "za"];
 const _DMONTHS = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
 
@@ -20,79 +9,147 @@ function dutchDate(daysFromNow = 7) {
 }
 
 function apiDateToDutch(dateStr) {
+  if (!dateStr) return dutchDate(7);
   const [d, m] = dateStr.split("-").map(Number);
+  if (!d || !m) return dutchDate(7);
   const date = new Date(new Date().getFullYear(), m - 1, d);
   return `${_DDAYS[date.getDay()]} ${d} ${_DMONTHS[m - 1]}`;
 }
 
-const CATEGORY_EMOJI = {
-  "dranken": "🥤", "zuivel": "🥛", "vlees": "🥩", "brood": "🍞",
-  "bakkerij": "🥐", "vis": "🐟", "diepvries": "🧊", "groenten": "🥦",
-  "fruit": "🍎", "koeken": "🍫", "chocolade": "🍫", "snoep": "🍬",
-  "wijn": "🍷", "bier": "🍺", "hygiëne": "🧴", "beauty": "🧴",
-  "huishouden": "🧹", "baby": "🍼", "pasta": "🍝", "rijst": "🍚",
-  "kaas": "🧀", "aardappelen": "🥔", "maaltijden": "🍲", "charcuterie": "🥓",
-  "sauzen": "🫙", "ontbijt": "🫓", "koffie": "☕", "thee": "🍵",
-  "snacks": "🍿", "chips": "🍟",
-};
-
 function categoryToEmoji(cat) {
+  const map = {
+    "dranken": "🥤", "zuivel": "🥛", "vlees": "🥩", "brood": "🍞",
+    "bakkerij": "🥐", "vis": "🐟", "diepvries": "🧊", "groenten": "🥦",
+    "fruit": "🍎", "koeken": "🍫", "chocolade": "🍫", "snoep": "🍬",
+    "wijn": "🍷", "bier": "🍺", "hygiëne": "🧴", "beauty": "🧴",
+    "huishouden": "🧹", "pasta": "🍝", "kaas": "🧀", "maaltijden": "🍲",
+    "charcuterie": "🥓", "koffie": "☕", "thee": "🍵", "snacks": "🍿",
+  };
   if (!cat) return "🛒";
   const lower = cat.toLowerCase();
-  for (const [key, emoji] of Object.entries(CATEGORY_EMOJI)) {
+  for (const [key, emoji] of Object.entries(map)) {
     if (lower.includes(key)) return emoji;
   }
   return "🛒";
 }
 
-async function fetchColruytGroupDeals(clientCode, storeConfig, placeId = 710, maxResults = 15) {
-  const url = new URL("https://ecgproductmw.colruytgroup.com/ecgproductmw/v2/nl/products");
-  url.searchParams.set("clientCode", clientCode);
-  url.searchParams.set("isAvailable", "true");
-  url.searchParams.set("page", "1");
-  url.searchParams.set("size", "100");
-  url.searchParams.set("placeId", String(placeId));
-  url.searchParams.set("inPromo", "true");
+async function scrapeColruyt(browser, maxResults = 15) {
+  const page = await browser.newPage();
+  try {
+    // Intercept the Colruyt Group API calls the website makes
+    const apiData = [];
+    page.on("response", async (response) => {
+      const url = response.url();
+      if (url.includes("ecgproductmw") || url.includes("colruytgroup.com")) {
+        try {
+          const json = await response.json();
+          if (json.products && json.products.length > 0) apiData.push(json);
+        } catch { /* skip */ }
+      }
+    });
 
-  const res = await fetch(url.toString(), { headers: BROWSER_HEADERS });
-  if (!res.ok) throw new Error(`${storeConfig.store} API ${res.status}`);
-  const data = await res.json();
+    await page.goto("https://www.colruyt.be/nl/promoties", {
+      waitUntil: "domcontentloaded",
+      timeout: 45000,
+    });
+    await page.waitForTimeout(5000);
 
-  return (data.products || [])
-    .filter(p => p.price?.isPromoActive === "Y")
-    .slice(0, maxResults)
-    .map((product, index) => {
-      const pr = product.price || {};
-      const promo = (product.promotion || [])[0] || {};
-      const basicPrice = pr.basicPrice || 0;
-      const qtyPrice = pr.quantityPrice;
-      const qtyQty = qtyPrice ? parseFloat(pr.quantityPriceQuantity || 1) : 1;
-      const isQtyDeal = qtyPrice && qtyQty > 1 && qtyPrice < basicPrice;
-      const savings = isQtyDeal ? Math.round((1 - qtyPrice / basicPrice) * 100) : 0;
-      let dealText;
-      if (isQtyDeal) dealText = `${Math.round(qtyQty)} voor €${(qtyPrice * qtyQty).toFixed(2)}`;
-      else if (pr.priceReason === "Promo") dealText = "Actieprijs";
-      else if (pr.priceReason === "Reaction") dealText = "Laagste prijs";
-      else dealText = "Promo";
-      const validUntil = promo.publicationEndDate ? apiDateToDutch(promo.publicationEndDate) : dutchDate(7);
+    // Check intercepted API calls
+    if (apiData.length > 0) {
+      const products = apiData[0].products || [];
+      return products.filter(p => p.price?.isPromoActive === "Y").slice(0, maxResults).map((product, index) => {
+        const pr = product.price || {};
+        const promo = (product.promotion || [])[0] || {};
+        const basicPrice = pr.basicPrice || 0;
+        const qtyPrice = pr.quantityPrice;
+        const qtyQty = qtyPrice ? parseFloat(pr.quantityPriceQuantity || 1) : 1;
+        const isQtyDeal = qtyPrice && qtyQty > 1 && qtyPrice < basicPrice;
+        const savings = isQtyDeal ? Math.round((1 - qtyPrice / basicPrice) * 100) : 0;
+        let dealText;
+        if (isQtyDeal) dealText = `${Math.round(qtyQty)} voor €${(qtyPrice * qtyQty).toFixed(2)}`;
+        else if (pr.priceReason === "Promo") dealText = "Actieprijs";
+        else if (pr.priceReason === "Reaction") dealText = "Laagste prijs";
+        else dealText = "Promo";
+        return {
+          id: 1000 + index,
+          store: "Colruyt", storeColor: "#E31837", storeLogo: "C",
+          item: product.name || "Onbekend",
+          deal: dealText,
+          category: product.topCategoryName || "Overig",
+          originalPrice: basicPrice,
+          newPrice: isQtyDeal ? parseFloat(qtyPrice.toFixed(2)) : basicPrice,
+          savings,
+          emoji: categoryToEmoji(product.topCategoryName),
+          validUntil: apiDateToDutch(promo.publicationEndDate),
+          hot: promo.topPromo === true,
+          description: (product.description || "").replace(/\n/g, " ").trim(),
+          image: product.thumbNail || null,
+        };
+      });
+    }
+
+    // Fallback: scrape HTML product cards
+    const products = await page.evaluate(() => {
+      const results = [];
+      const selectors = [
+        "[data-testid='product-card']",
+        "[class*='ProductCard']",
+        "[class*='product-card']",
+        "[class*='ProductTile']",
+        "[class*='product-tile']",
+        ".product-list-item",
+      ];
+      let cards = [];
+      for (const sel of selectors) {
+        cards = Array.from(document.querySelectorAll(sel));
+        if (cards.length > 2) break;
+      }
+      for (const card of cards.slice(0, 25)) {
+        const name = card.querySelector("[class*='name'], [class*='title'], [class*='description'], h2, h3, p")?.textContent?.trim();
+        if (!name || name.length < 3) continue;
+        const priceEls = card.querySelectorAll("[class*='price'], [class*='Price']");
+        let newPrice = 0, originalPrice = 0;
+        for (const el of priceEls) {
+          const match = el.textContent.match(/(\d+)[,.](\d{2})/);
+          if (match) {
+            const val = parseFloat(`${match[1]}.${match[2]}`);
+            if (el.className?.includes?.("old") || el.className?.includes?.("before") || el.tagName === "S") {
+              originalPrice = val;
+            } else if (newPrice === 0) {
+              newPrice = val;
+            }
+          }
+        }
+        if (originalPrice === 0) originalPrice = newPrice;
+        const image = card.querySelector("img")?.src || null;
+        const badge = card.querySelector("[class*='badge'], [class*='promo'], [class*='discount']")?.textContent?.trim() || "";
+        results.push({ name, newPrice, originalPrice, badge, image });
+      }
+      return results;
+    });
+
+    return products.slice(0, maxResults).map((p, i) => {
+      const savings = p.originalPrice > p.newPrice && p.newPrice > 0
+        ? Math.round((1 - p.newPrice / p.originalPrice) * 100) : 0;
       return {
-        id: storeConfig.idBase + index,
-        store: storeConfig.store, storeColor: storeConfig.color, storeLogo: storeConfig.logo,
-        item: product.name || "Onbekend product",
-        deal: dealText,
-        category: product.topCategoryName || "Overig",
-        originalPrice: basicPrice,
-        newPrice: isQtyDeal ? parseFloat(qtyPrice.toFixed(2)) : basicPrice,
+        id: 1000 + i,
+        store: "Colruyt", storeColor: "#E31837", storeLogo: "C",
+        item: p.name,
+        deal: p.badge || (savings > 0 ? `-${savings}%` : "Actieprijs"),
+        category: "Overig",
+        originalPrice: p.originalPrice,
+        newPrice: p.newPrice,
         savings,
-        emoji: categoryToEmoji(product.topCategoryName),
-        validUntil,
-        hot: promo.topPromo === true,
-        description: (product.description || "").replace(/\n/g, " ").trim(),
-        image: product.thumbNail || null,
+        emoji: "🛒",
+        validUntil: dutchDate(7),
+        hot: savings >= 30,
+        description: "",
+        image: p.image,
       };
     });
+  } finally {
+    await page.close();
+  }
 }
 
-module.exports = {
-  scrapeColruyt: () => fetchColruytGroupDeals("clp", { store: "Colruyt", color: "#E31837", logo: "C", idBase: 1000 }, 710, 15),
-};
+module.exports = { scrapeColruyt };
