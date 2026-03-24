@@ -98,6 +98,61 @@ app.get("/api/deals", async (req, res) => {
 
 app.get("/health", (req, res) => res.json({ ok: true, cachedAt: cacheTime ? new Date(cacheTime).toISOString() : null }));
 
+app.get("/debug", async (req, res) => {
+  const results = {};
+
+  // Test Colruyt (no browser)
+  try {
+    const deals = await scrapeColruyt();
+    results.colruyt = { ok: true, count: deals.length };
+  } catch (e) {
+    results.colruyt = { ok: false, error: e.message };
+  }
+
+  // Test AH (no browser)
+  try {
+    const deals = await scrapeAlbertHeijn();
+    results.albertHeijn = { ok: true, count: deals.length };
+  } catch (e) {
+    results.albertHeijn = { ok: false, error: e.message };
+  }
+
+  // Test browser launch
+  let browser;
+  try {
+    const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
+    browser = await chromium.launch({
+      executablePath,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"],
+    });
+    results.browser = { ok: true, version: browser.version() };
+  } catch (e) {
+    results.browser = { ok: false, error: e.message };
+    return res.json(results);
+  }
+
+  // Test each browser scraper
+  const browserScrapers = [
+    { name: "lidl", fn: () => scrapeLidl(browser) },
+    { name: "delhaize", fn: () => scrapeDelhaize(browser) },
+    { name: "carrefour", fn: () => scrapeCarrefour(browser) },
+    { name: "aldi", fn: () => scrapeAldi(browser) },
+    { name: "spar", fn: () => scrapeSpar(browser) },
+  ];
+
+  for (const { name, fn } of browserScrapers) {
+    try {
+      const deals = await fn();
+      results[name] = { ok: true, count: deals.length, sample: deals[0]?.item || null };
+    } catch (e) {
+      results[name] = { ok: false, error: e.message };
+    }
+  }
+
+  await browser.close();
+  res.json(results);
+});
+
 app.listen(PORT, () => {
   console.log(`[DealRadar] Scraper service running on port ${PORT}`);
   // Warm up cache on start
