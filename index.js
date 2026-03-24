@@ -117,7 +117,7 @@ app.get("/debug", async (req, res) => {
 const STORE_URLS = {
   colruyt: "https://www.colruyt.be/nl/promoties",
   ah: "https://www.ah.nl/bonus",
-  lidl: "https://www.lidl.be/nl/aanbiedingen",
+  lidl: "https://www.lidl.be/c/nl-BE/promoties/s10007548",
   delhaize: "https://www.delhaize.be/nl/promoties",
   carrefour: "https://www.carrefour.be/nl/acties",
   aldi: "https://www.aldi.be/nl/weekaanbieding.html",
