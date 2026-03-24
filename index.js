@@ -114,6 +114,68 @@ app.get("/debug", async (req, res) => {
   res.json(results);
 });
 
+const STORE_URLS = {
+  colruyt: "https://www.colruyt.be/nl/promoties",
+  ah: "https://www.ah.nl/bonus",
+  lidl: "https://www.lidl.be/nl/aanbiedingen",
+  delhaize: "https://www.delhaize.be/nl/promoties",
+  carrefour: "https://www.carrefour.be/nl/acties",
+  aldi: "https://www.aldi.be/nl/weekaanbieding.html",
+  spar: "https://www.mijnspar.be/nl/promoties",
+};
+
+app.get("/dump/:store", async (req, res) => {
+  const url = STORE_URLS[req.params.store];
+  if (!url) return res.status(404).json({ error: "Unknown store" });
+
+  let browser;
+  try {
+    browser = await launchBrowser();
+    const page = await browser.newPage();
+    const intercepted = [];
+
+    page.on("response", async (response) => {
+      const rUrl = response.url();
+      const ct = response.headers()["content-type"] || "";
+      if (ct.includes("application/json")) {
+        try {
+          const json = await response.json();
+          intercepted.push({ url: rUrl, keys: Object.keys(json), sample: JSON.stringify(json).slice(0, 500) });
+        } catch { /* skip */ }
+      }
+    });
+
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.waitForTimeout(5000);
+
+    const info = await page.evaluate(() => {
+      // Count classes
+      const classCounts = {};
+      for (const el of document.querySelectorAll("*")) {
+        for (const cls of el.classList) {
+          classCounts[cls] = (classCounts[cls] || 0) + 1;
+        }
+      }
+      const topClasses = Object.entries(classCounts)
+        .filter(([, c]) => c >= 4 && c <= 60)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 30)
+        .map(([cls, count]) => ({ cls, count }));
+
+      // Sample HTML from likely product areas
+      const bodyHtml = document.body?.innerHTML?.slice(0, 8000) || "";
+
+      return { title: document.title, url: location.href, topClasses, bodyHtml };
+    });
+
+    await browser.close();
+    res.json({ ...info, intercepted: intercepted.slice(0, 10) });
+  } catch (e) {
+    if (browser) await browser.close().catch(() => {});
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`[DealRadar] Scraper service running on port ${PORT}`);
   scrapeAll().then(deals => {
