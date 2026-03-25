@@ -125,30 +125,78 @@ async function scrapeLidl(browser, maxResults = 100) {
     }
     await page.waitForTimeout(2000);
 
-    // 1. Probeer __NEXT_DATA__ — bevat alle SSR product data
+    // 1. Probeer __NUXT_DATA__ — Nuxt 3 SSR state, bevat useProductStore met alle producten
     try {
-      const nextDataText = await page.evaluate(() => document.getElementById("__NEXT_DATA__")?.textContent);
-      if (nextDataText) {
-        const parsed = JSON.parse(nextDataText);
-        const findProducts = (obj, depth = 0) => {
-          if (depth > 10 || !obj || typeof obj !== "object") return null;
-          if (Array.isArray(obj) && obj.length > 2 && (obj[0]?.name || obj[0]?.title || obj[0]?.fullTitle || obj[0]?.price)) return obj;
-          if (!Array.isArray(obj)) {
-            for (const val of Object.values(obj)) {
-              const found = findProducts(val, depth + 1);
-              if (found && found.length > 5) return found;
+      const nuxtDataText = await page.evaluate(() => document.getElementById("__NUXT_DATA__")?.textContent);
+      if (nuxtDataText) {
+        // Nuxt 3 devalue formaat: flat array, references by index
+        // Resolve: volg integer-referenties en speciale markers
+        const arr = JSON.parse(nuxtDataText);
+        function resolve(idx, seen = new Set()) {
+          if (idx === null || idx === undefined || typeof idx !== "number") return idx;
+          if (seen.has(idx)) return null;
+          seen.add(idx);
+          const val = arr[idx];
+          if (val === null || val === undefined || typeof val !== "object") return val;
+          if (Array.isArray(val)) {
+            // Speciale markers: ["ShallowReactive", n], ["Reactive", n], ["Set", ...], ["Map", ...]
+            if (val[0] === "ShallowReactive" || val[0] === "Reactive") return resolve(val[1], new Set(seen));
+            if (val[0] === "Set") return val.slice(1).map(i => resolve(i, new Set(seen)));
+            if (val[0] === "Map") {
+              const m = {};
+              for (let i = 1; i < val.length; i += 2) m[resolve(val[i], new Set(seen))] = resolve(val[i + 1], new Set(seen));
+              return m;
             }
+            return val.map(i => (typeof i === "number" ? resolve(i, new Set(seen)) : i));
           }
-          return null;
-        };
-        const products = findProducts(parsed);
-        if (products && products.length > 2) {
-          console.log("[Lidl] __NEXT_DATA__ products:", products.length);
-          return products.slice(0, maxResults).map(mapLidlProduct);
+          // Object: resolve all values
+          const out = {};
+          for (const [k, v] of Object.entries(val)) {
+            out[k] = typeof v === "number" ? resolve(v, new Set(seen)) : v;
+          }
+          return out;
         }
-        console.log("[Lidl] __NEXT_DATA__ aanwezig maar geen producten gevonden");
+
+        // Zoek useProductStore index in pinia state
+        // Structuur: arr[0] = root, arr[1] = {pinia: N}, arr[N] = {useProductStore: M, ...}
+        let productStoreIdx = null;
+        for (let i = 0; i < Math.min(arr.length, 50); i++) {
+          const v = arr[i];
+          if (v && typeof v === "object" && !Array.isArray(v) && "useProductStore" in v) {
+            productStoreIdx = v["useProductStore"];
+            break;
+          }
+        }
+
+        if (productStoreIdx !== null) {
+          console.log("[Lidl] useProductStore index:", productStoreIdx);
+          const productStore = resolve(productStoreIdx);
+          console.log("[Lidl] productStore keys:", productStore ? Object.keys(productStore).slice(0, 10) : "null");
+
+          // Zoek een array van producten in de store
+          const findArr = (obj, depth = 0) => {
+            if (depth > 6 || !obj || typeof obj !== "object") return null;
+            if (Array.isArray(obj) && obj.length > 2 && obj[0] && typeof obj[0] === "object" &&
+                (obj[0].name || obj[0].title || obj[0].fullTitle || obj[0].price !== undefined)) return obj;
+            if (!Array.isArray(obj)) {
+              for (const v of Object.values(obj)) {
+                const found = findArr(v, depth + 1);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          const products = findArr(productStore);
+          if (products && products.length > 2) {
+            console.log("[Lidl] __NUXT_DATA__ products:", products.length);
+            return products.slice(0, maxResults).map(mapLidlProduct);
+          }
+          console.log("[Lidl] productStore geladen maar geen producten-array gevonden");
+        } else {
+          console.log("[Lidl] useProductStore niet gevonden in __NUXT_DATA__");
+        }
       }
-    } catch (e) { console.log("[Lidl] __NEXT_DATA__ fout:", e.message); }
+    } catch (e) { console.log("[Lidl] __NUXT_DATA__ fout:", e.message); }
 
     // 2. API intercepts (voor als de pagina toch XHR gebruikt)
     if (apiProducts.length > 0) {
