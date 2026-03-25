@@ -25,12 +25,36 @@ function categoryToEmoji(cat) {
   return "🛒";
 }
 
-const LIDL_URLS = [
-  "https://www.lidl.be/c/nl-BE/aanbiedingen-deze-week/a10082242",
-  "https://www.lidl.be/c/nl-BE/promoties/s10007548",
-  "https://www.lidl.be/p/promoties/a5",
-  "https://www.lidl.be/c/nl-BE/aanbiedingen",
-];
+const LIDL_SITEMAP = "https://www.lidl.be/explore/assets/s/pages_nl-BE_be.xml.gz";
+const LIDL_FALLBACK_URL = "https://www.lidl.be/c/nl-BE/aanbiedingen-deze-week/a10082242";
+
+async function getLidlPromoUrl() {
+  try {
+    const zlib = require("zlib");
+    const https = require("https");
+    const xml = await new Promise((resolve, reject) => {
+      https.get(LIDL_SITEMAP, res => {
+        const chunks = [];
+        res.on("data", c => chunks.push(c));
+        res.on("end", () => {
+          zlib.gunzip(Buffer.concat(chunks), (err, buf) => {
+            if (err) reject(err);
+            else resolve(buf.toString());
+          });
+        });
+      }).on("error", reject);
+    });
+    const matches = [...xml.matchAll(/https:\/\/www\.lidl\.be\/c\/nl-BE\/aanbiedingen-deze-week\/[^<"]+/g)];
+    if (matches.length > 0) {
+      const url = matches[matches.length - 1][0]; // neem de laatste (meest recente)
+      console.log("[Lidl] Promo URL uit sitemap:", url);
+      return url;
+    }
+  } catch (e) {
+    console.log("[Lidl] Sitemap ophalen mislukt:", e.message);
+  }
+  return LIDL_FALLBACK_URL;
+}
 
 function getPrice(v) {
   if (typeof v === "number") return v;
@@ -60,23 +84,22 @@ async function scrapeLidl(browser, maxResults = 15) {
       } catch { /* skip */ }
     });
 
-    // Try URLs until one doesn't 404
+    // Haal de actuele promo-URL op uit de sitemap (verandert wekelijks)
+    const promoUrl = await getLidlPromoUrl();
     let loaded = false;
-    for (const url of LIDL_URLS) {
-      try {
-        const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-        if (response?.status() !== 404) {
-          console.log("[Lidl] Loaded:", url, "status:", response?.status());
-          loaded = true;
-          break;
-        }
-        console.log("[Lidl] 404 at:", url);
-      } catch (e) {
-        console.log("[Lidl] Error at:", url, e.message);
+    try {
+      const response = await page.goto(promoUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+      if (response?.status() !== 404) {
+        console.log("[Lidl] Loaded:", promoUrl, "status:", response?.status());
+        loaded = true;
+      } else {
+        console.log("[Lidl] 404 at:", promoUrl);
       }
+    } catch (e) {
+      console.log("[Lidl] Error:", e.message);
     }
 
-    if (!loaded) throw new Error("Lidl: geen enkele URL geladen");
+    if (!loaded) throw new Error("Lidl: promo pagina niet geladen");
 
     // Accept cookie consent (OneTrust) — blocks product loading if not dismissed
     try {
