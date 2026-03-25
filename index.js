@@ -42,18 +42,13 @@ async function scrapeAll() {
     { name: "Spar",         fn: () => scrapeSpar(browser) },
   ];
 
-  // Run scrapers sequentially to avoid overloading the browser
-  const deals = [];
-  for (const { name, fn } of scrapers) {
-    try {
-      const result = await fn();
-      console.log(`[DealRadar] ${name}: ${result.length} deals`);
-      deals.push(...result);
-    } catch (err) {
-      console.error(`[DealRadar] ${name} FAILED:`, err.message);
-    }
-  }
+  // Run scrapers in parallel — each opens its own page in the shared browser
+  const results = await Promise.allSettled(scrapers.map(({ name, fn }) =>
+    fn().then(r => { console.log(`[DealRadar] ${name}: ${r.length} deals`); return r; })
+       .catch(err => { console.error(`[DealRadar] ${name} FAILED:`, err.message); return []; })
+  ));
 
+  const deals = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
   await browser.close();
   console.log(`[DealRadar] Total: ${deals.length} deals`);
   return deals;
