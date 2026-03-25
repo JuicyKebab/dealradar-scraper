@@ -62,7 +62,7 @@ function getPrice(v) {
   return parseFloat(v) || 0;
 }
 
-async function scrapeLidl(browser, maxResults = 15) {
+async function scrapeLidl(browser, maxResults = 100) {
   const page = await browser.newPage();
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
@@ -84,32 +84,40 @@ async function scrapeLidl(browser, maxResults = 15) {
       } catch { /* skip */ }
     });
 
-    // Haal de actuele promo-URL op uit de sitemap (verandert wekelijks)
-    const promoUrl = await getLidlPromoUrl();
-    let loaded = false;
-    try {
-      const response = await page.goto(promoUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-      if (response?.status() !== 404) {
-        console.log("[Lidl] Loaded:", promoUrl, "status:", response?.status());
-        loaded = true;
-      } else {
-        console.log("[Lidl] 404 at:", promoUrl);
-      }
-    } catch (e) {
-      console.log("[Lidl] Error:", e.message);
+    // Gebruik de /q/nl-BE/query/promo pagina — toont alle promos, niet alleen wekelijkse
+    const promoUrl = "https://www.lidl.be/q/nl-BE/query/promo";
+    await page.goto(promoUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+    console.log("[Lidl] Loaded:", promoUrl);
+
+    // Accepteer cookies — meerdere selectors voor verschillende pagina's
+    const cookieSelectors = [
+      "#onetrust-accept-btn-handler",
+      "button[data-testid='uc-accept-all-button']",
+      "button.accept-all",
+      "[id*='accept'][id*='all']",
+    ];
+    for (const sel of cookieSelectors) {
+      try {
+        await page.waitForSelector(sel, { timeout: 4000 });
+        await page.click(sel);
+        console.log("[Lidl] Cookie accepted via:", sel);
+        break;
+      } catch { /* probeer volgende */ }
     }
 
-    if (!loaded) throw new Error("Lidl: promo pagina niet geladen");
-
-    // Accept cookie consent (OneTrust) — blocks product loading if not dismissed
-    try {
-      await page.waitForSelector("#onetrust-accept-btn-handler", { timeout: 5000 });
-      await page.click("#onetrust-accept-btn-handler");
-      console.log("[Lidl] Cookie banner accepted");
-      await page.waitForTimeout(2000);
-    } catch { /* no banner or already accepted */ }
-
+    // Wacht op product laden na cookie acceptatie
     await page.waitForTimeout(5000);
+
+    // Scroll om lazy loading te triggeren
+    for (let i = 1; i <= 3; i++) {
+      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 3);
+      await page.waitForTimeout(2000);
+    }
+
+    // Extra wacht als producten nog laden
+    if (apiProducts.length === 0) {
+      await page.waitForTimeout(4000);
+    }
 
     // Check API intercepts
     if (apiProducts.length > 0) {
