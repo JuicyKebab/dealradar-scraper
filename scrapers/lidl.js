@@ -30,16 +30,17 @@ async function scrapeLidl(browser, maxResults = 1000) {
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
-    // Bezoek homepage om sessie/cookies te initialiseren
-    await page.goto("https://www.lidl.be/", { waitUntil: "domcontentloaded", timeout: 30000 });
+    // Laad de SPA promo-pagina — dit initialiseert de app en zet alle benodigde cookies/tokens
+    await page.goto("https://www.lidl.be/q/nl-BE/query/promo", { waitUntil: "domcontentloaded", timeout: 45000 });
     try {
       await page.waitForSelector("#onetrust-accept-btn-handler", { timeout: 8000 });
       await page.click("#onetrust-accept-btn-handler");
       console.log("[Lidl] Cookie geaccepteerd");
-      await page.waitForTimeout(1500);
     } catch { /* geen banner */ }
+    // Wacht tot de SPA volledig geladen is
+    await page.waitForTimeout(4000);
 
-    // Doe de API-call vanuit de browser (inclusief alle cookies/headers)
+    // Doe de API-call vanuit de browser (inclusief alle cookies/tokens van de SPA)
     const apiUrl = "https://www.lidl.be/q/api/query/promo?assortment=BE&locale=nl_BE&version=v2.0.0&size=1000";
     const result = await page.evaluate(async (url) => {
       try {

@@ -111,9 +111,26 @@ async function scrapeAldi(browser, maxResults = 15) {
     ];
 
     const products = await page.evaluate((selectors) => {
-      const NAV_BLACKLIST = ["boodschappenlijst", "aanmelden", "zoeken", "menu", "home", "contact", "winkel", "nieuwsbrief", "jobs"];
       const results = [];
 
+      // Eerst: extraheer uit data-article JSON-attributen (AEM structuur, bevat echte prijzen)
+      const articleEls = Array.from(document.querySelectorAll("[data-article]"));
+      for (const el of articleEls) {
+        try {
+          const data = JSON.parse(el.getAttribute("data-article"));
+          const info = data.productInfo || data;
+          const name = info.productName || info.name;
+          if (!name || name.length < 2) continue;
+          const brand = info.brand && !["Not Owned", "n/a"].includes(info.brand) ? info.brand + " " : "";
+          const price = parseFloat(info.priceWithTax) || parseFloat(info.price) || 0;
+          const origPrice = parseFloat(info.originalPriceWithTax) || parseFloat(info.originalPrice) || price;
+          const image = el.querySelector("img")?.src || el.querySelector("img")?.getAttribute("data-src") || null;
+          results.push({ name: brand + name, newPrice: price, originalPrice: origPrice, image });
+        } catch { /* skip */ }
+      }
+      if (results.length > 2) return results;
+
+      // Fallback: HTML scraping
       let cards = [];
       for (const sel of selectors) {
         cards = Array.from(document.querySelectorAll(sel));
@@ -124,10 +141,8 @@ async function scrapeAldi(browser, maxResults = 15) {
         const nameEl = card.querySelector(".mod-article-tile__name, [class*='name'], [class*='title'], h2, h3, h4, strong, p");
         const name = nameEl?.textContent?.trim();
         if (!name || name.length < 2 || name.length > 120) continue;
-        if (NAV_BLACKLIST.some(b => name.toLowerCase().includes(b))) continue;
 
         const allText = card.textContent || "";
-        // Match "€ 2,99" or "2,99 €" or "€2.99"
         const priceMatch = allText.match(/€\s*(\d+)[,.](\d{2})/) || allText.match(/(\d+)[,.](\d{2})\s*€/);
         const newPrice = priceMatch ? parseFloat(`${priceMatch[1]}.${priceMatch[2]}`) : 0;
 
@@ -137,7 +152,6 @@ async function scrapeAldi(browser, maxResults = 15) {
 
         const image = card.querySelector("img")?.src
           || card.querySelector("img")?.getAttribute("data-src")
-          || card.querySelector("[style*='background-image']")?.style?.backgroundImage?.match(/url\("?(.+?)"?\)/)?.[1]
           || null;
 
         results.push({ name, newPrice, originalPrice, image });
