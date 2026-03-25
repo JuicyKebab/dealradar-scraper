@@ -1,4 +1,4 @@
-// Lidl Belgium — Playwright scraper
+// Lidl Belgium — directe API (geen browser nodig)
 const _DDAYS = ["zo", "ma", "di", "wo", "do", "vr", "za"];
 const _DMONTHS = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
 
@@ -8,9 +8,9 @@ function dutchDate(daysFromNow = 7) {
   return `${_DDAYS[d.getDay()]} ${d.getDate()} ${_DMONTHS[d.getMonth()]}`;
 }
 
-function isoToDutch(dateStr) {
-  if (!dateStr) return dutchDate(7);
-  const d = new Date(dateStr);
+function unixToDutch(ts) {
+  if (!ts) return dutchDate(7);
+  const d = new Date(ts * 1000);
   if (isNaN(d)) return dutchDate(7);
   return `${_DDAYS[d.getDay()]} ${d.getDate()} ${_DMONTHS[d.getMonth()]}`;
 }
@@ -25,250 +25,44 @@ function categoryToEmoji(cat) {
   return "🛒";
 }
 
-const LIDL_SITEMAP = "https://www.lidl.be/explore/assets/s/pages_nl-BE_be.xml.gz";
-const LIDL_FALLBACK_URL = "https://www.lidl.be/c/nl-BE/aanbiedingen-deze-week/a10082242";
-
-async function getLidlPromoUrl() {
-  try {
-    const zlib = require("zlib");
-    const https = require("https");
-    const xml = await new Promise((resolve, reject) => {
-      https.get(LIDL_SITEMAP, res => {
-        const chunks = [];
-        res.on("data", c => chunks.push(c));
-        res.on("end", () => {
-          zlib.gunzip(Buffer.concat(chunks), (err, buf) => {
-            if (err) reject(err);
-            else resolve(buf.toString());
-          });
-        });
-      }).on("error", reject);
-    });
-    const matches = [...xml.matchAll(/https:\/\/www\.lidl\.be\/c\/nl-BE\/aanbiedingen-deze-week\/[^<"]+/g)];
-    if (matches.length > 0) {
-      const url = matches[matches.length - 1][0]; // neem de laatste (meest recente)
-      console.log("[Lidl] Promo URL uit sitemap:", url);
-      return url;
-    }
-  } catch (e) {
-    console.log("[Lidl] Sitemap ophalen mislukt:", e.message);
-  }
-  return LIDL_FALLBACK_URL;
-}
-
-function getPrice(v) {
-  if (typeof v === "number") return v;
-  if (v && typeof v === "object") return v.price || v.amount || v.value || 0;
-  return parseFloat(v) || 0;
-}
-
-function mapLidlProduct(p, i) {
-  const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || 0;
-  const orig = getPrice(p.regularPrice) || getPrice(p.originalPrice) || getPrice(p.fullPrice)
-    || getPrice(p.price?.regular) || getPrice(p.wasPrice) || getPrice(p.normalPrice)
-    || getPrice(p.basePrice) || curr;
-  // Voor full-price weekartikelen zonder korting: curr == orig
-  const finalCurr = curr > 0 ? curr : orig;
-  const savings = orig > finalCurr && finalCurr > 0 ? Math.round((1 - finalCurr / orig) * 100) : 0;
-  return {
-    id: 4000 + i,
-    store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
-    item: p.fullTitle || p.name || p.title || p.productName || "Onbekend",
-    deal: savings > 0 ? `-${savings}%` : (p.promotionText || p.discount || "Aanbieding"),
-    category: p.category || p.categoryName || "Overig",
-    originalPrice: orig, newPrice: finalCurr, savings,
-    emoji: categoryToEmoji(p.category || p.categoryName),
-    validUntil: isoToDutch(p.endDate || p.validUntil || p.promotionEndDate),
-    hot: savings >= 30,
-    description: p.description || "",
-    image: p.image || p.imageUrl || p.thumbnail || p.images?.[0]?.url || null,
+async function scrapeLidl(_browser, maxResults = 1000) {
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "nl-BE,nl;q=0.9",
+    "Referer": "https://www.lidl.be/q/nl-BE/query/promo",
   };
-}
 
-async function scrapeLidl(browser, maxResults = 500) {
-  const page = await browser.newPage();
-  try {
-    await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
+  const url = "https://www.lidl.be/q/api/query/promo?assortment=BE&locale=nl_BE&version=v2.0.0&size=1000";
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error(`Lidl API ${res.status}`);
+  const json = await res.json();
 
-    // Intercept API responses — inclusief application/mindshift.search+json (Lidl's eigen content-type)
-    const apiProducts = [];
-    const seenSearchUrls = new Set();
-    page.on("response", async (response) => {
-      const ct = response.headers()["content-type"] || "";
-      const url = response.url();
-      // Vang ook mindshift search responses op
-      if (!ct.includes("json") && !ct.includes("mindshift")) return;
-      try {
-        const text = await response.text();
-        const json = JSON.parse(text);
-        const items = json.products || json.results || json.hits || json.items
-          || json.gridElements || json.searchResult?.gridElements
-          || json.data?.products || json.data?.results || json.offers
-          || (Array.isArray(json) ? json : null) || [];
-        if (items.length > 2 && (items[0]?.name || items[0]?.title || items[0]?.fullTitle)) {
-          console.log("[Lidl] Intercept:", url.slice(0, 100), "->", items.length, "ct:", ct.slice(0, 40));
-          apiProducts.push(...items);
-          seenSearchUrls.add(url);
-        }
-      } catch { /* skip */ }
-    });
+  const items = json.items || [];
+  console.log(`[Lidl] API: ${items.length} items (numFound: ${json.numFound})`);
 
-    // SPA zoekpagina — vuurt product-search API (werkt nu met EU IP via Railway Europe West)
-    const promoUrl = "https://www.lidl.be/q/nl-BE/query/promo";
-    await page.goto(promoUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-    console.log("[Lidl] Loaded:", promoUrl);
-
-    // Cookie banner wegklikken zodat lazy-load ook werkt
-    try {
-      await page.waitForSelector("#onetrust-accept-btn-handler", { timeout: 6000 });
-      await page.click("#onetrust-accept-btn-handler");
-      console.log("[Lidl] Cookie geaccepteerd");
-    } catch { /* geen banner */ }
-
-    // Scroll langzaam — triggert paginering API-calls in de SPA
-    await page.waitForTimeout(4000);
-    for (let i = 1; i <= 8; i++) {
-      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 8);
-      await page.waitForTimeout(1500);
-    }
-    // Geef de SPA extra tijd om alle pagina's te laden
-    await page.waitForTimeout(5000);
-
-    // 1. Combineer SSR (__NUXT_DATA__) + API intercepts voor maximaal bereik
-    let ssrProducts = [];
-    try {
-      const nuxtDataText = await page.evaluate(() => document.getElementById("__NUXT_DATA__")?.textContent);
-      if (nuxtDataText) {
-        const arr = JSON.parse(nuxtDataText);
-        function resolve(idx, seen = new Set()) {
-          if (idx === null || idx === undefined || typeof idx !== "number") return idx;
-          if (seen.has(idx)) return null;
-          seen.add(idx);
-          const val = arr[idx];
-          if (val === null || val === undefined || typeof val !== "object") return val;
-          if (Array.isArray(val)) {
-            if (val[0] === "ShallowReactive" || val[0] === "Reactive") return resolve(val[1], new Set(seen));
-            if (val[0] === "Set") return val.slice(1).map(i => resolve(i, new Set(seen)));
-            if (val[0] === "Map") {
-              const m = {};
-              for (let i = 1; i < val.length; i += 2) m[resolve(val[i], new Set(seen))] = resolve(val[i + 1], new Set(seen));
-              return m;
-            }
-            return val.map(i => (typeof i === "number" ? resolve(i, new Set(seen)) : i));
-          }
-          const out = {};
-          for (const [k, v] of Object.entries(val)) {
-            out[k] = typeof v === "number" ? resolve(v, new Set(seen)) : v;
-          }
-          return out;
-        }
-
-        let productStoreIdx = null;
-        for (let i = 0; i < Math.min(arr.length, 50); i++) {
-          const v = arr[i];
-          if (v && typeof v === "object" && !Array.isArray(v) && "useProductStore" in v) {
-            productStoreIdx = v["useProductStore"];
-            break;
-          }
-        }
-
-        if (productStoreIdx !== null) {
-          const productStore = resolve(productStoreIdx);
-          console.log("[Lidl] productStore keys:", productStore ? Object.keys(productStore) : "null");
-          // store.products is de echte zoeklijst; criteoProducts zijn advertenties
-          ssrProducts = Array.isArray(productStore?.products) ? productStore.products : [];
-          console.log("[Lidl] __NUXT_DATA__ products:", ssrProducts.length,
-            "| criteo:", productStore?.criteoProducts?.length ?? 0,
-            "| numFound:", productStore?.numFound);
-        }
-      }
-    } catch (e) { console.log("[Lidl] __NUXT_DATA__ fout:", e.message); }
-
-    // 2. Combineer SSR + API intercepts, dedupliceer op naam
-    const allProducts = [...ssrProducts];
-    for (const p of apiProducts) {
-      const name = p.fullTitle || p.name || p.title || "";
-      if (name && !allProducts.some(x => (x.fullTitle || x.name || x.title) === name)) {
-        allProducts.push(p);
-      }
-    }
-    if (apiProducts.length > 0) console.log("[Lidl] API intercept:", apiProducts.length, "extra producten");
-
-    if (allProducts.length > 0) {
-      console.log("[Lidl] Totaal:", allProducts.length, "producten");
-      return allProducts.slice(0, maxResults).map(mapLidlProduct);
-    }
-
-    // 3. Log page info for debugging
-    const pageInfo = await page.evaluate(() => ({
-      url: location.href,
-      title: document.title,
-      productClasses: [...new Set(Array.from(document.querySelectorAll("[class]"))
-        .flatMap(el => [...el.classList])
-        .filter(c => c.includes("product") || c.includes("tile") || c.includes("card") || c.includes("offer") || c.includes("item") || c.includes("promo"))
-      )].slice(0, 20),
-    }));
-    console.log("[Lidl] Page:", pageInfo.url, "| Product classes:", pageInfo.productClasses.join(", "));
-
-    // HTML scraping with Lidl-specific selectors
-    const products = await page.evaluate(() => {
-      const results = [];
-      const selectors = [
-        ".product-grid-box",
-        ".n-product-card",
-        "[data-product-id]",
-        "[class*='product-grid']",
-        "[class*='ProductCard']",
-        "[class*='offer-card']",
-        "article[class*='product']",
-        "li[class*='product']",
-      ];
-
-      let cards = [];
-      for (const sel of selectors) {
-        cards = Array.from(document.querySelectorAll(sel));
-        if (cards.length > 2) break;
-      }
-
-      console.log("Lidl cards found:", cards.length, "with selectors");
-
-      for (const card of cards.slice(0, 25)) {
-        const name = card.querySelector("[class*='title'], [class*='name'], [class*='description'], h2, h3, h4")?.textContent?.trim();
-        if (!name || name.length < 3) continue;
-
-        const allText = card.textContent || "";
-        const priceMatch = allText.match(/€\s*(\d+)[,.](\d{2})/);
-        const newPrice = priceMatch ? parseFloat(`${priceMatch[1]}.${priceMatch[2]}`) : 0;
-
-        const oldEl = card.querySelector("s, del, [class*='before'], [class*='old'], [class*='regular']");
-        const oldMatch = oldEl?.textContent?.match(/(\d+)[,.](\d{2})/);
-        const originalPrice = oldMatch ? parseFloat(`${oldMatch[1]}.${oldMatch[2]}`) : newPrice;
-
-        const badge = card.querySelector("[class*='discount'], [class*='badge'], [class*='label'], [class*='tag']")?.textContent?.trim() || "";
-        const image = card.querySelector("img")?.src || card.querySelector("img")?.getAttribute("data-src") || null;
-
-        results.push({ name, newPrice, originalPrice, badge, image });
-      }
-      return results;
-    });
-
-    console.log("[Lidl] HTML found:", products.length, "products");
-    return products.slice(0, maxResults).map((p, i) => {
-      const savings = p.originalPrice > p.newPrice && p.newPrice > 0 ? Math.round((1 - p.newPrice / p.originalPrice) * 100) : 0;
-      return {
-        id: 4000 + i,
-        store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
-        item: p.name,
-        deal: p.badge || (savings > 0 ? `-${savings}%` : "Aanbieding"),
-        category: "Overig",
-        originalPrice: p.originalPrice, newPrice: p.newPrice, savings,
-        emoji: "🛒", validUntil: dutchDate(7), hot: savings >= 30,
-        description: "", image: p.image,
-      };
-    });
-  } finally {
-    await page.close();
-  }
+  return items.slice(0, maxResults).map((item, i) => {
+    const d = item.gridbox?.data || item;
+    const priceObj = d.price || {};
+    const curr = priceObj.price ?? 0;
+    const orig = priceObj.oldPrice ?? priceObj.discount?.deletedPrice ?? curr;
+    const savings = priceObj.discount?.percentageDiscount ?? (orig > curr && curr > 0 ? Math.round((1 - curr / orig) * 100) : 0);
+    return {
+      id: 4000 + i,
+      store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
+      item: d.fullTitle || d.title || "Onbekend",
+      deal: savings > 0 ? `-${savings}%` : (d.promotionText || "Aanbieding"),
+      category: d.category || "Overig",
+      originalPrice: orig,
+      newPrice: curr,
+      savings,
+      emoji: categoryToEmoji(d.category),
+      validUntil: unixToDutch(d.storeEndDate || d.stockAvailability?.badgeInfoV2?.[0]?.validUntil),
+      hot: savings >= 30,
+      description: d.keyfacts?.features?.[0] || "",
+      image: d.image || d.imageList?.[0] || null,
+    };
+  });
 }
 
 module.exports = { scrapeLidl };
