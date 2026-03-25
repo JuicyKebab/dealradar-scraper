@@ -178,7 +178,7 @@ const STORE_URLS = {
 
 app.get("/rawproduct/:store", async (req, res) => {
   const storeMap = {
-    lidl: { url: "https://www.lidl.be/c/nl-BE/promoties/s10007548", cookie: "#onetrust-accept-btn-handler" },
+    lidl: { url: "https://www.lidl.be/c/nl-BE/aanbiedingen-deze-week/a10082242", cookie: "#onetrust-accept-btn-handler" },
     aldi: { url: "https://www.aldi.be/nl/onze-aanbiedingen.html", cookie: null },
     delhaize: { url: "https://www.delhaize.be/nl/promoties", cookie: "#didomi-notice-agree-button" },
   };

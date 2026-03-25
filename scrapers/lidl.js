@@ -26,9 +26,9 @@ function categoryToEmoji(cat) {
 }
 
 const LIDL_URLS = [
+  "https://www.lidl.be/c/nl-BE/aanbiedingen-deze-week/a10082242",
   "https://www.lidl.be/c/nl-BE/promoties/s10007548",
   "https://www.lidl.be/p/promoties/a5",
-  "https://www.lidl.be/nl/aanbiedingen/",
   "https://www.lidl.be/c/nl-BE/aanbiedingen",
 ];
 
@@ -91,10 +91,13 @@ async function scrapeLidl(browser, maxResults = 15) {
     // Check API intercepts
     if (apiProducts.length > 0) {
       console.log("[Lidl] API intercept:", apiProducts.length, "products");
+      if (apiProducts[0]) console.log("[Lidl] Prijs keys:", Object.keys(apiProducts[0]).filter(k => k.toLowerCase().includes("price") || k.toLowerCase().includes("prijs")));
       return apiProducts.slice(0, maxResults).map((p, i) => {
-        const orig = getPrice(p.regularPrice || p.originalPrice || p.fullPrice) || getPrice(p.price?.regular) || 0;
-        const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || orig;
-        const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
+        const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || 0;
+        const orig = getPrice(p.regularPrice) || getPrice(p.originalPrice) || getPrice(p.fullPrice)
+          || getPrice(p.price?.regular) || getPrice(p.wasPrice) || getPrice(p.normalPrice)
+          || getPrice(p.basePrice) || curr;
+        const savings = orig > curr && curr > 0 ? Math.round((1 - curr / orig) * 100) : 0;
         return {
           id: 4000 + i,
           store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
@@ -131,8 +134,9 @@ async function scrapeLidl(browser, maxResults = 15) {
         if (products && products.length > 0) {
           console.log("[Lidl] __NEXT_DATA__ products:", products.length);
           return products.slice(0, maxResults).map((p, i) => {
-            const orig = getPrice(p.regularPrice || p.originalPrice || p.fullPrice) || getPrice(p.price?.regular) || 0;
-            const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || orig;
+            const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || 0;
+            const orig = getPrice(p.regularPrice) || getPrice(p.originalPrice) || getPrice(p.fullPrice)
+              || getPrice(p.wasPrice) || getPrice(p.normalPrice) || curr;
             const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
             return {
               id: 4000 + i,
