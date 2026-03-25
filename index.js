@@ -11,9 +11,47 @@ const { scrapeAlbertHeijn } = require("./scrapers/albert-heijn");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
+
 let cache = null;
 let cacheTime = 0;
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+async function saveToSupabase(deals) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/cache`, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+      },
+      body: JSON.stringify({ key: "deals", data: deals, updated_at: new Date().toISOString() }),
+    });
+    if (res.ok) console.log(`[DealRadar] Supabase: ${deals.length} deals opgeslagen`);
+    else console.error("[DealRadar] Supabase save mislukt:", res.status);
+  } catch (err) {
+    console.error("[DealRadar] Supabase save error:", err.message);
+  }
+}
+
+async function loadFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/cache?key=eq.deals&select=data,updated_at`,
+      { headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` } }
+    );
+    const rows = await res.json();
+    return rows[0] || null;
+  } catch (err) {
+    console.error("[DealRadar] Supabase load error:", err.message);
+    return null;
+  }
+}
 
 function launchBrowser() {
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
@@ -50,7 +88,8 @@ async function scrapeAll() {
 
   const deals = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
   await browser.close();
-  console.log(`[DealRadar] Total: ${deals.length} deals`);
+  console.log(`[DealRadar] Totaal: ${deals.length} deals`);
+  await saveToSupabase(deals);
   return deals;
 }
 
@@ -214,8 +253,23 @@ app.get("/dump/:store", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`[DealRadar] Scraper service running on port ${PORT}`);
-  scrapeAll().then(deals => {
-    cache = deals;
-    cacheTime = Date.now();
-  }).catch(err => console.error("[DealRadar] Warmup failed:", err.message));
+  // Laad eerst Supabase cache — vermijd onnodige scrape bij herstart
+  loadFromSupabase().then(row => {
+    if (row?.data?.length > 0) {
+      cache = row.data;
+      cacheTime = new Date(row.updated_at).getTime();
+      console.log(`[DealRadar] Supabase: ${cache.length} deals hersteld (${row.updated_at})`);
+      if (Date.now() - cacheTime >= CACHE_TTL) {
+        console.log("[DealRadar] Cache verlopen, refresh op achtergrond...");
+        refreshInBackground();
+      }
+    } else {
+      console.log("[DealRadar] Geen Supabase data, scrape gestart...");
+      scrapeAll().then(deals => { cache = deals; cacheTime = Date.now(); })
+                 .catch(err => console.error("[DealRadar] Warmup mislukt:", err.message));
+    }
+  }).catch(() => {
+    scrapeAll().then(deals => { cache = deals; cacheTime = Date.now(); })
+               .catch(err => console.error("[DealRadar] Warmup mislukt:", err.message));
+  });
 });
