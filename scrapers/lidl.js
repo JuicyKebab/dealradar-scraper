@@ -67,14 +67,16 @@ function mapLidlProduct(p, i) {
   const orig = getPrice(p.regularPrice) || getPrice(p.originalPrice) || getPrice(p.fullPrice)
     || getPrice(p.price?.regular) || getPrice(p.wasPrice) || getPrice(p.normalPrice)
     || getPrice(p.basePrice) || curr;
-  const savings = orig > curr && curr > 0 ? Math.round((1 - curr / orig) * 100) : 0;
+  // Voor full-price weekartikelen zonder korting: curr == orig
+  const finalCurr = curr > 0 ? curr : orig;
+  const savings = orig > finalCurr && finalCurr > 0 ? Math.round((1 - finalCurr / orig) * 100) : 0;
   return {
     id: 4000 + i,
     store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
     item: p.fullTitle || p.name || p.title || p.productName || "Onbekend",
     deal: savings > 0 ? `-${savings}%` : (p.promotionText || p.discount || "Aanbieding"),
     category: p.category || p.categoryName || "Overig",
-    originalPrice: orig, newPrice: curr, savings,
+    originalPrice: orig, newPrice: finalCurr, savings,
     emoji: categoryToEmoji(p.category || p.categoryName),
     validUntil: isoToDutch(p.endDate || p.validUntil || p.promotionEndDate),
     hot: savings >= 30,

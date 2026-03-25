@@ -1,4 +1,4 @@
-// Delhaize Belgium — Playwright scraper
+// Delhaize Belgium — directe API + Playwright fallback
 const _DDAYS = ["zo", "ma", "di", "wo", "do", "vr", "za"];
 const _DMONTHS = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
 
@@ -7,14 +7,12 @@ function dutchDate(daysFromNow = 7) {
   d.setDate(d.getDate() + daysFromNow);
   return `${_DDAYS[d.getDay()]} ${d.getDate()} ${_DMONTHS[d.getMonth()]}`;
 }
-
 function isoToDutch(dateStr) {
   if (!dateStr) return dutchDate(7);
   const d = new Date(dateStr);
   if (isNaN(d)) return dutchDate(7);
   return `${_DDAYS[d.getDay()]} ${d.getDate()} ${_DMONTHS[d.getMonth()]}`;
 }
-
 function categoryToEmoji(cat) {
   const map = {
     "dranken": "🥤", "zuivel": "🥛", "vlees": "🥩", "brood": "🍞",
@@ -24,178 +22,125 @@ function categoryToEmoji(cat) {
   };
   if (!cat) return "🛒";
   const lower = cat.toLowerCase();
-  for (const [key, emoji] of Object.entries(map)) {
-    if (lower.includes(key)) return emoji;
-  }
+  for (const [key, emoji] of Object.entries(map)) { if (lower.includes(key)) return emoji; }
   return "🛒";
 }
 
-// Recursively search a JSON object for arrays that look like product lists
-function findProducts(obj, depth = 0) {
-  if (depth > 5 || !obj || typeof obj !== "object") return null;
-  if (Array.isArray(obj)) {
-    if (obj.length > 0 && (obj[0]?.name || obj[0]?.productName || obj[0]?.title)) return obj;
-    return null;
-  }
-  for (const val of Object.values(obj)) {
-    const found = findProducts(val, depth + 1);
-    if (found) return found;
+function mapDelhaize(p, i) {
+  const orig = p.price?.regularPrice ?? p.price?.value ?? p.regularPrice ?? p.originalPrice ?? 0;
+  const curr = p.price?.promotionPrice ?? p.promoPrice?.value ?? p.promotionPrice ?? p.discountedPrice ?? orig;
+  const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
+  return {
+    id: 5000 + i,
+    store: "Delhaize", storeColor: "#E4002B", storeLogo: "D",
+    item: p.name || p.productName || p.title || "Onbekend",
+    deal: savings > 0 ? `-${savings}%` : (p.promotionDescription || p.promoText || "Promo"),
+    category: p.categories?.[0]?.name || p.topCategory || p.categoryName || "Overig",
+    originalPrice: orig, newPrice: curr, savings,
+    emoji: categoryToEmoji(p.categories?.[0]?.name || p.categoryName),
+    validUntil: isoToDutch(p.promotionEndDate || p.endDate || p.validUntilDate),
+    hot: savings >= 30,
+    description: p.description || p.summary || "",
+    image: p.images?.[0]?.url || p.imageUrl || p.thumbnail || null,
+  };
+}
+
+async function fetchDelhaizeAPI() {
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "nl-BE,nl;q=0.9",
+    "Referer": "https://www.delhaize.be/nl/promoties",
+  };
+
+  // Delhaize OCAPI product search — promoties filter
+  const endpoints = [
+    "https://www.delhaize.be/api/2.0/products?q=*&refinements=c_isPromo%3Dtrue&count=100&locale=nl_BE",
+    "https://www.delhaize.be/on/demandware.store/Sites-DelhBE-Site/nl_BE/Search-Show?q=*&srule=best-matches&pmid=promotions&sz=100&format=ajax",
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) continue;
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) continue;
+      const data = await res.json();
+      const products = data.hits || data.products || data.results || data.data?.products || [];
+      if (products.length > 2) {
+        console.log("[Delhaize] API:", url.slice(0, 60), "->", products.length);
+        return products;
+      }
+    } catch { /* try next */ }
   }
   return null;
 }
 
-async function scrapeDelhaize(browser, maxResults = 15) {
+async function scrapeDelhaize(browser, maxResults = 50) {
+  // Probeer eerst directe API
+  const apiResult = await fetchDelhaizeAPI();
+  if (apiResult && apiResult.length > 2) {
+    return apiResult.slice(0, maxResults).map(mapDelhaize);
+  }
+
+  // Playwright fallback met uitgebreide response-interceptie
   const page = await browser.newPage();
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
-    // Intercept ALL JSON responses
     const apiProducts = [];
     page.on("response", async (response) => {
       const ct = response.headers()["content-type"] || "";
+      const url = response.url();
       if (!ct.includes("application/json")) return;
       try {
         const json = await response.json();
-        const url = response.url();
-
-        // Delhaize GraphQL: data.products / data.promotions / data.promotionPage.products etc.
         const candidates = [
-          json.results,
-          json.products,
-          json.items,
-          json.data?.products,
-          json.data?.promotions,
+          json.results, json.products, json.items,
+          json.data?.products, json.data?.promotions,
           json.data?.promotionProducts,
           json.data?.promotionPage?.products,
-          json.data?.promotionPage?.items,
           json.data?.searchProducts?.results,
           json.data?.promotedProducts,
-          json.data?.catalog?.products,
-        ].filter(a => Array.isArray(a) && a.length > 2 && (a[0]?.name || a[0]?.title || a[0]?.productName)
-          && typeof (a[0]?.name || a[0]?.title || a[0]?.productName) === "string"
-          && (a[0]?.name || a[0]?.title || a[0]?.productName).length < 200);
+          json.hits,
+        ].filter(a => Array.isArray(a) && a.length > 2
+          && (a[0]?.name || a[0]?.title || a[0]?.productName)
+          && typeof (a[0]?.name || a[0]?.title || a[0]?.productName) === "string");
 
         if (candidates.length > 0) {
-          console.log("[Delhaize] Found products in", url.slice(0, 80), "count:", candidates[0].length);
+          console.log("[Delhaize] API intercept:", url.slice(0, 80), "->", candidates[0].length);
           apiProducts.push(...candidates[0]);
-          return;
-        }
-
-        // Deep search as fallback
-        const found = findProducts(json);
-        if (found && found.length > 2) {
-          console.log("[Delhaize] Deep-found products in", url.slice(0, 80), "count:", found.length);
-          apiProducts.push(...found);
         }
       } catch { /* skip */ }
     });
 
     await page.goto("https://www.delhaize.be/nl/promoties", { waitUntil: "domcontentloaded", timeout: 45000 });
 
-    // Accept cookie consent — blocks GraphQL product queries if not dismissed
+    // Cookie consent
     try {
-      const cookieSelectors = [
-        "#didomi-notice-agree-button",
-        "[data-didomi-action='agree-to-all']",
-        "button:has-text('Alles accepteren')",
-        "button:has-text('Accepteer alles')",
-        "button:has-text('Tout accepter')",
-        "button:has-text('Akkoord')",
-        "[class*='acceptAll']",
-        "[class*='accept-all']",
-        "[data-testid*='accept']",
-      ];
-      await page.waitForSelector(cookieSelectors.join(", "), { timeout: 6000 });
-      await page.click(cookieSelectors.join(", "));
-      console.log("[Delhaize] Cookie banner accepted");
-      await page.waitForTimeout(3000);
-    } catch { /* no banner or already accepted */ }
+      await page.waitForSelector("#didomi-notice-agree-button", { timeout: 8000 });
+      await page.click("#didomi-notice-agree-button");
+      console.log("[Delhaize] Cookie geaccepteerd");
+      await page.waitForTimeout(4000);
+    } catch { /* geen banner */ }
 
-    // Scroll to trigger lazy loading and wait for React to load products
-    await page.waitForTimeout(4000);
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
-    await page.waitForTimeout(3000);
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(5000);
+    for (let i = 1; i <= 4; i++) {
+      await page.evaluate((p) => window.scrollTo(0, document.body.scrollHeight * p), i / 4);
+      await page.waitForTimeout(1500);
+    }
     await page.waitForTimeout(3000);
 
     if (apiProducts.length > 0) {
-      console.log("[Delhaize] Total API products:", apiProducts.length);
+      console.log("[Delhaize] Totaal API:", apiProducts.length);
       const unique = apiProducts.filter((p, i, arr) =>
         arr.findIndex(x => (x.id || x.productId || x.ean) === (p.id || p.productId || p.ean)) === i
       );
-      return unique.slice(0, maxResults).map((p, i) => {
-        const orig = p.price?.regularPrice || p.price?.value || p.regularPrice || p.originalPrice || 0;
-        const curr = p.price?.promotionPrice || p.promoPrice?.value || p.promotionPrice || p.discountedPrice || orig;
-        const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
-        return {
-          id: 5000 + i,
-          store: "Delhaize", storeColor: "#E4002B", storeLogo: "D",
-          item: p.name || p.productName || p.title || "Onbekend",
-          deal: savings > 0 ? `-${savings}%` : (p.promotionDescription || p.promoText || "Promo"),
-          category: p.categories?.[0]?.name || p.topCategory || p.categoryName || "Overig",
-          originalPrice: orig, newPrice: curr, savings,
-          emoji: categoryToEmoji(p.categories?.[0]?.name || p.categoryName),
-          validUntil: isoToDutch(p.promotionEndDate || p.endDate || p.validUntilDate),
-          hot: savings >= 30,
-          description: p.description || p.summary || "",
-          image: p.images?.[0]?.url || p.imageUrl || p.thumbnail || null,
-        };
-      });
+      return unique.slice(0, maxResults).map(mapDelhaize);
     }
 
-    // HTML fallback — styled-components uses hashed class names, use data-testid
-    const products = await page.evaluate(() => {
-      const results = [];
-      const selectors = [
-        "[data-testid='product-card']",
-        "[data-testid*='product']",
-        "[data-testid*='promotion']",
-        "[data-stellar*='product']",
-        "[class*='ProductCard']",
-        "[class*='product-card']",
-        "[class*='PromotionCard']",
-        ".product-tile",
-      ];
-
-      let cards = [];
-      for (const sel of selectors) {
-        cards = Array.from(document.querySelectorAll(sel));
-        if (cards.length > 2) break;
-      }
-      console.log("Delhaize HTML cards found:", cards.length);
-
-      for (const card of cards.slice(0, 25)) {
-        const name = card.querySelector("[data-testid*='name'], [data-testid*='title'], h2, h3, p")?.textContent?.trim();
-        if (!name || name.length < 3) continue;
-
-        const allText = card.textContent || "";
-        const prices = [...allText.matchAll(/€\s*(\d+)[,.](\d{2})/g)].map(m => parseFloat(`${m[1]}.${m[2]}`));
-        const newPrice = prices.length > 0 ? Math.min(...prices) : 0;
-        const originalPrice = prices.length > 1 ? Math.max(...prices) : newPrice;
-
-        const badge = card.querySelector("[data-testid*='badge'], [data-testid*='promo'], [class*='badge']")?.textContent?.trim() || "";
-        const image = card.querySelector("img")?.src || null;
-
-        results.push({ name, newPrice, originalPrice, badge, image });
-      }
-      return results;
-    });
-
-    console.log("[Delhaize] HTML found:", products.length, "products");
-    return products.slice(0, maxResults).map((p, i) => {
-      const savings = p.originalPrice > p.newPrice && p.newPrice > 0
-        ? Math.round((1 - p.newPrice / p.originalPrice) * 100) : 0;
-      return {
-        id: 5000 + i,
-        store: "Delhaize", storeColor: "#E4002B", storeLogo: "D",
-        item: p.name,
-        deal: p.badge || (savings > 0 ? `-${savings}%` : "Promo"),
-        category: "Overig",
-        originalPrice: p.originalPrice, newPrice: p.newPrice, savings,
-        emoji: "🛒", validUntil: dutchDate(7), hot: savings >= 30,
-        description: "", image: p.image,
-      };
-    });
+    console.log("[Delhaize] Geen producten gevonden");
+    return [];
   } finally {
     await page.close();
   }
