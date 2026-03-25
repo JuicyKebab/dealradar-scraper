@@ -71,7 +71,9 @@ async function scrapeDelhaize(browser, maxResults = 15) {
           json.data?.searchProducts?.results,
           json.data?.promotedProducts,
           json.data?.catalog?.products,
-        ].filter(a => Array.isArray(a) && a.length > 0 && (a[0]?.name || a[0]?.title || a[0]?.productName));
+        ].filter(a => Array.isArray(a) && a.length > 2 && (a[0]?.name || a[0]?.title || a[0]?.productName)
+          && typeof (a[0]?.name || a[0]?.title || a[0]?.productName) === "string"
+          && (a[0]?.name || a[0]?.title || a[0]?.productName).length < 200);
 
         if (candidates.length > 0) {
           console.log("[Delhaize] Found products in", url.slice(0, 80), "count:", candidates[0].length);

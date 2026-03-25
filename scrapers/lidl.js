@@ -37,23 +37,21 @@ async function scrapeLidl(browser, maxResults = 15) {
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
-    // Intercept product API calls
+    // Intercept ALL JSON responses looking for product data
     const apiProducts = [];
     page.on("response", async (response) => {
-      const url = response.url();
       const ct = response.headers()["content-type"] || "";
       if (!ct.includes("application/json")) return;
-
-      // Look for product/promo data
-      if (url.includes("product") || url.includes("promo") || url.includes("offer") || url.includes("search") || url.includes("category")) {
-        try {
-          const json = await response.json();
-          const items = json.products || json.results || json.hits || json.items || json.data?.products || [];
-          if (items.length > 2 && (items[0]?.name || items[0]?.title || items[0]?.fullTitle)) {
-            apiProducts.push(...items);
-          }
-        } catch { /* skip */ }
-      }
+      try {
+        const json = await response.json();
+        const items = json.products || json.results || json.hits || json.items
+          || json.data?.products || json.data?.results || json.offers
+          || (Array.isArray(json) ? json : null) || [];
+        if (items.length > 2 && (items[0]?.name || items[0]?.title || items[0]?.fullTitle)) {
+          console.log("[Lidl] JSON intercept:", response.url().slice(0, 80), "->", items.length);
+          apiProducts.push(...items);
+        }
+      } catch { /* skip */ }
     });
 
     // Try URLs until one doesn't 404
@@ -106,6 +104,45 @@ async function scrapeLidl(browser, maxResults = 15) {
         };
       });
     }
+
+    // Try __NEXT_DATA__ embedded product data
+    try {
+      const nextDataText = await page.evaluate(() => document.getElementById("__NEXT_DATA__")?.textContent);
+      if (nextDataText) {
+        const parsed = JSON.parse(nextDataText);
+        const findProducts = (obj, depth = 0) => {
+          if (depth > 8 || !obj || typeof obj !== "object") return null;
+          if (Array.isArray(obj) && obj.length > 2 && (obj[0]?.name || obj[0]?.title || obj[0]?.fullTitle)) return obj;
+          if (!Array.isArray(obj)) {
+            for (const val of Object.values(obj)) {
+              const found = findProducts(val, depth + 1);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        const products = findProducts(parsed);
+        if (products && products.length > 0) {
+          console.log("[Lidl] __NEXT_DATA__ products:", products.length);
+          return products.slice(0, maxResults).map((p, i) => {
+            const orig = p.regularPrice || p.originalPrice || p.price?.regular || p.fullPrice || 0;
+            const curr = p.price || p.currentPrice || p.price?.current || p.promotionPrice || orig;
+            const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
+            return {
+              id: 4000 + i,
+              store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
+              item: p.fullTitle || p.name || p.title || "Onbekend",
+              deal: savings > 0 ? `-${savings}%` : (p.promotionText || "Aanbieding"),
+              category: p.category || p.categoryName || "Overig",
+              originalPrice: orig, newPrice: curr, savings,
+              emoji: categoryToEmoji(p.category || p.categoryName),
+              validUntil: isoToDutch(p.endDate || p.validUntil),
+              hot: savings >= 30, description: p.description || "", image: p.image || p.imageUrl || null,
+            };
+          });
+        }
+      }
+    } catch { /* continue */ }
 
     // Log page info for debugging
     const pageInfo = await page.evaluate(() => ({

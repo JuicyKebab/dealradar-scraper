@@ -54,12 +54,20 @@ async function scrapeAlbertHeijn(browser, maxResults = 15) {
 
     await page.goto("https://www.ah.nl/bonus", { waitUntil: "domcontentloaded", timeout: 45000 });
 
-    // Wait for skeleton loaders to disappear (max 15s)
+    // Accept cookie consent if present
+    try {
+      await page.waitForSelector("button:has-text('Alles accepteren'), button:has-text('Akkoord'), [id*='accept-all'], [data-testid*='accept']", { timeout: 5000 });
+      await page.click("button:has-text('Alles accepteren'), button:has-text('Akkoord'), [id*='accept-all'], [data-testid*='accept']");
+      console.log("[AH] Cookie banner accepted");
+      await page.waitForTimeout(2000);
+    } catch { /* no banner */ }
+
+    // Wait for skeleton loaders to disappear (max 20s)
     try {
       await page.waitForFunction(() => {
         const skeletons = document.querySelectorAll('[class*="skeleton"]');
         return skeletons.length === 0;
-      }, { timeout: 15000 });
+      }, { timeout: 20000 });
     } catch { /* continue anyway */ }
 
     // Scroll to trigger lazy loading
@@ -92,6 +100,50 @@ async function scrapeAlbertHeijn(browser, maxResults = 15) {
         };
       });
     }
+
+    // __NEXT_DATA__ fallback — AH uses Next.js, product data may be server-rendered
+    try {
+      const nextDataText = await page.evaluate(() => document.getElementById("__NEXT_DATA__")?.textContent);
+      if (nextDataText) {
+        const parsed = JSON.parse(nextDataText);
+        const findAHProducts = (obj, depth = 0) => {
+          if (depth > 8 || !obj || typeof obj !== "object") return null;
+          if (Array.isArray(obj) && obj.length > 2) {
+            const first = obj[0];
+            if (first?.title || first?.description || first?.name) return obj;
+          }
+          if (!Array.isArray(obj)) {
+            for (const val of Object.values(obj)) {
+              const found = findAHProducts(val, depth + 1);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        const products = findAHProducts(parsed);
+        if (products && products.length > 0) {
+          console.log("[AH] __NEXT_DATA__ products:", products.length);
+          return products.slice(0, maxResults).map((p, i) => {
+            const curr = p.currentPrice?.amount ?? p.priceLabel?.now?.amount ?? p.price?.now ?? 0;
+            const prev = p.priceBeforeBonus?.amount ?? p.priceLabel?.was?.amount ?? p.price?.was ?? curr;
+            const savings = prev > curr ? Math.round((1 - curr / prev) * 100) : 0;
+            return {
+              id: 3000 + i,
+              store: "Albert Heijn", storeColor: "#00A0E2", storeLogo: "AH",
+              item: p.title || p.description || p.name || "Onbekend",
+              deal: savings > 0 ? `-${savings}%` : (p.bonusMechanism || "Bonus"),
+              category: p.mainCategory || p.subCategory || "Overig",
+              originalPrice: prev, newPrice: curr, savings,
+              emoji: categoryToEmoji(p.mainCategory || p.subCategory),
+              validUntil: isoToDutch(p.bonusEndDate || p.endDate),
+              hot: savings >= 30,
+              description: p.descriptionFull || p.description || "",
+              image: p.images?.[0]?.url || p.imageUrl || null,
+            };
+          });
+        }
+      }
+    } catch { /* continue to HTML fallback */ }
 
     // HTML fallback — use data-testid selectors (more stable than hashed CSS modules)
     const products = await page.evaluate(() => {
