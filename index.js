@@ -62,9 +62,11 @@ function launchBrowser() {
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      "--disable-blink-features=AutomationControlled",
     ],
   });
 }
+
 
 async function scrapeAll() {
   console.log("[DealRadar] Starting scrape...");
