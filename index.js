@@ -231,26 +231,28 @@ app.get("/rawproduct/:store", async (req, res) => {
     }
     await page.waitForTimeout(5000);
 
-    // Extract __NEXT_DATA__ for SSR pages
+    // Extract embedded SSR data (Next.js / Nuxt / etc.)
     let nextData = null;
     try {
-      const raw = await page.evaluate(() => document.getElementById("__NEXT_DATA__")?.textContent);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        // Find any array with > 2 items that looks like products
-        const findArr = (obj, depth = 0) => {
-          if (depth > 10 || !obj || typeof obj !== "object") return null;
-          if (Array.isArray(obj) && obj.length > 2 && obj[0] && typeof obj[0] === "object") return { length: obj.length, sample: obj[0] };
-          if (!Array.isArray(obj)) {
-            for (const [k, v] of Object.entries(obj)) {
-              const found = findArr(v, depth + 1);
-              if (found && found.length > 5) return { key: k, ...found };
-            }
-          }
-          return null;
+      nextData = await page.evaluate(() => {
+        // Check for __NUXT_DATA__ (Nuxt 3)
+        const nuxtEl = document.getElementById("__NUXT_DATA__");
+        if (nuxtEl) return { type: "nuxt", length: nuxtEl.textContent.length, snippet: nuxtEl.textContent.slice(0, 500) };
+        // Check for __NEXT_DATA__ (Next.js)
+        const nextEl = document.getElementById("__NEXT_DATA__");
+        if (nextEl) return { type: "next", length: nextEl.textContent.length, snippet: nextEl.textContent.slice(0, 500) };
+        // Check for inline JSON scripts
+        const scripts = Array.from(document.querySelectorAll("script[type='application/json']"));
+        if (scripts.length) return { type: "json-scripts", count: scripts.length, snippet: scripts[0].textContent.slice(0, 300) };
+        // Dump page title and any window.__NUXT__ hint
+        return {
+          type: "none",
+          title: document.title,
+          url: location.href,
+          bodyLength: document.body?.innerHTML?.length,
+          bodySnippet: document.body?.innerHTML?.slice(0, 1000),
         };
-        nextData = findArr(parsed) || { topKeys: Object.keys(parsed) };
-      }
+      });
     } catch { /* skip */ }
 
     await browser.close();
