@@ -90,19 +90,25 @@ async function scrapeLidl(browser, maxResults = 500) {
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
-    // Intercept API responses — useful if the SSR page also fires XHR for additional pages
+    // Intercept API responses — inclusief application/mindshift.search+json (Lidl's eigen content-type)
     const apiProducts = [];
+    const seenSearchUrls = new Set();
     page.on("response", async (response) => {
       const ct = response.headers()["content-type"] || "";
-      if (!ct.includes("application/json")) return;
+      const url = response.url();
+      // Vang ook mindshift search responses op
+      if (!ct.includes("json") && !ct.includes("mindshift")) return;
       try {
-        const json = await response.json();
+        const text = await response.text();
+        const json = JSON.parse(text);
         const items = json.products || json.results || json.hits || json.items
+          || json.gridElements || json.searchResult?.gridElements
           || json.data?.products || json.data?.results || json.offers
           || (Array.isArray(json) ? json : null) || [];
         if (items.length > 2 && (items[0]?.name || items[0]?.title || items[0]?.fullTitle)) {
-          console.log("[Lidl] JSON intercept:", response.url().slice(0, 80), "->", items.length);
+          console.log("[Lidl] Intercept:", url.slice(0, 100), "->", items.length, "ct:", ct.slice(0, 40));
           apiProducts.push(...items);
+          seenSearchUrls.add(url);
         }
       } catch { /* skip */ }
     });
@@ -168,24 +174,12 @@ async function scrapeLidl(browser, maxResults = 500) {
 
         if (productStoreIdx !== null) {
           const productStore = resolve(productStoreIdx);
-          // Zoek de GROOTSTE product-array (niet de eerste)
-          const findLargest = (obj, depth = 0) => {
-            if (depth > 6 || !obj || typeof obj !== "object") return null;
-            let best = null;
-            if (Array.isArray(obj) && obj.length > 2 && obj[0] && typeof obj[0] === "object" &&
-                (obj[0].name || obj[0].title || obj[0].fullTitle || obj[0].price !== undefined)) {
-              best = obj;
-            }
-            if (!Array.isArray(obj)) {
-              for (const v of Object.values(obj)) {
-                const found = findLargest(v, depth + 1);
-                if (found && (!best || found.length > best.length)) best = found;
-              }
-            }
-            return best;
-          };
-          ssrProducts = findLargest(productStore) || [];
-          console.log("[Lidl] __NUXT_DATA__ products:", ssrProducts.length);
+          console.log("[Lidl] productStore keys:", productStore ? Object.keys(productStore) : "null");
+          // store.products is de echte zoeklijst; criteoProducts zijn advertenties
+          ssrProducts = Array.isArray(productStore?.products) ? productStore.products : [];
+          console.log("[Lidl] __NUXT_DATA__ products:", ssrProducts.length,
+            "| criteo:", productStore?.criteoProducts?.length ?? 0,
+            "| numFound:", productStore?.numFound);
         }
       }
     } catch (e) { console.log("[Lidl] __NUXT_DATA__ fout:", e.message); }

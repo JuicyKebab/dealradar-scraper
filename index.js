@@ -196,10 +196,10 @@ app.get("/rawproduct/:store", async (req, res) => {
       const url = response.url();
       const ct = response.headers()["content-type"] || "";
       // Log all lidl.be responses for debugging
-      if (url.includes("lidl.be") || ct.includes("application/json")) {
-        allUrls.push({ url: url.slice(0, 150), ct: ct.slice(0, 40), status: response.status() });
+      if (url.includes("lidl") || ct.includes("json") || ct.includes("mindshift")) {
+        allUrls.push({ url: url.slice(0, 150), ct: ct.slice(0, 60), status: response.status() });
       }
-      if (!ct.includes("application/json") && !ct.includes("mindshift") && !ct.includes("text/plain")) return;
+      if (!ct.includes("json") && !ct.includes("mindshift") && !ct.includes("text/plain")) return;
       try {
         const body = await response.text();
         const json = JSON.parse(body);
