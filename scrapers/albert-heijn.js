@@ -36,11 +36,12 @@ async function scrapeAlbertHeijn(browser, maxResults = 15) {
           json.products,
           json.bonusGroups?.flatMap(g => g.products || []),
           json.lanes?.flatMap(l => l.products || l.items || []),
+          json.cards?.flatMap(c => c.products || []),
           json.data?.products,
           json.results,
           json.items,
           Array.isArray(json) ? json : null,
-        ].filter(a => Array.isArray(a) && a.length > 2 && (a[0]?.title || a[0]?.name || a[0]?.id));
+        ].filter(a => Array.isArray(a) && a.length > 0 && (a[0]?.title || a[0]?.name || a[0]?.description || a[0]?.id));
 
         for (const arr of candidates) {
           if (arr.length > 0) {
@@ -79,7 +80,7 @@ async function scrapeAlbertHeijn(browser, maxResults = 15) {
         return {
           id: 3000 + i,
           store: "Albert Heijn", storeColor: "#00A0E2", storeLogo: "AH",
-          item: p.title || p.name || p.productName || "Onbekend",
+          item: p.title || p.description || p.name || p.productName || p.label || "Onbekend",
           deal: savings > 0 ? `-${savings}%` : (p.bonusMechanism || p.promotionType || "Bonus"),
           category: p.mainCategory || p.subCategory || p.category || "Overig",
           originalPrice: prev, newPrice: curr, savings,

@@ -32,7 +32,21 @@ function categoryToEmoji(cat) {
 async function scrapeCarrefour(browser, maxResults = 15) {
   const page = await browser.newPage();
   try {
-    await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
+    await page.setExtraHTTPHeaders({
+      "Accept-Language": "nl-BE,nl;q=0.9,en;q=0.8",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br",
+      "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"Windows"',
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-User": "?1",
+      "Upgrade-Insecure-Requests": "1",
+    });
+    // Set a realistic viewport
+    await page.setViewportSize({ width: 1280, height: 800 });
 
     // Intercept API responses
     const apiData = [];
@@ -49,8 +63,21 @@ async function scrapeCarrefour(browser, maxResults = 15) {
       }
     });
 
-    await page.goto("https://www.carrefour.be/nl/acties", { waitUntil: "domcontentloaded", timeout: 30000 });
+    const response = await page.goto("https://www.carrefour.be/nl/acties", { waitUntil: "domcontentloaded", timeout: 30000 });
+    // Cloudflare challenge detection
+    if (response?.status() === 403 || response?.status() === 503) {
+      console.log("[Carrefour] Blocked by Cloudflare, status:", response.status());
+      return [];
+    }
     await page.waitForTimeout(4000);
+
+    // Accept cookie consent if present
+    try {
+      await page.waitForSelector("button:has-text('Alles accepteren'), button:has-text('Accepteer'), #onetrust-accept-btn-handler", { timeout: 5000 });
+      await page.click("button:has-text('Alles accepteren'), button:has-text('Accepteer'), #onetrust-accept-btn-handler");
+      console.log("[Carrefour] Cookie banner accepted");
+      await page.waitForTimeout(2000);
+    } catch { /* no banner */ }
 
     // Check API responses
     for (const { json } of apiData) {

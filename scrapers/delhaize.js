@@ -90,6 +90,14 @@ async function scrapeDelhaize(browser, maxResults = 15) {
 
     await page.goto("https://www.delhaize.be/nl/promoties", { waitUntil: "domcontentloaded", timeout: 45000 });
 
+    // Accept cookie consent — blocks GraphQL product queries if not dismissed
+    try {
+      await page.waitForSelector("button:has-text('Alles accepteren'), button:has-text('Accepteer alles'), [data-testid*='accept'], button[id*='accept']", { timeout: 5000 });
+      await page.click("button:has-text('Alles accepteren'), button:has-text('Accepteer alles'), [data-testid*='accept'], button[id*='accept']");
+      console.log("[Delhaize] Cookie banner accepted");
+      await page.waitForTimeout(2000);
+    } catch { /* no banner or already accepted */ }
+
     // Scroll to trigger lazy loading and wait for React to load products
     await page.waitForTimeout(4000);
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));

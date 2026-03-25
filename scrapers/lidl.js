@@ -73,6 +73,15 @@ async function scrapeLidl(browser, maxResults = 15) {
     }
 
     if (!loaded) throw new Error("Lidl: geen enkele URL geladen");
+
+    // Accept cookie consent (OneTrust) — blocks product loading if not dismissed
+    try {
+      await page.waitForSelector("#onetrust-accept-btn-handler", { timeout: 5000 });
+      await page.click("#onetrust-accept-btn-handler");
+      console.log("[Lidl] Cookie banner accepted");
+      await page.waitForTimeout(2000);
+    } catch { /* no banner or already accepted */ }
+
     await page.waitForTimeout(5000);
 
     // Check API intercepts

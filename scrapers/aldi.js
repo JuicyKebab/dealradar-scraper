@@ -121,11 +121,12 @@ async function scrapeAldi(browser, maxResults = 15) {
         if (NAV_BLACKLIST.some(b => name.toLowerCase().includes(b))) continue;
 
         const allText = card.textContent || "";
-        const priceMatch = allText.match(/€\s*(\d+)[,.](\d{2})/);
+        // Match "€ 2,99" or "2,99 €" or "€2.99"
+        const priceMatch = allText.match(/€\s*(\d+)[,.](\d{2})/) || allText.match(/(\d+)[,.](\d{2})\s*€/);
         const newPrice = priceMatch ? parseFloat(`${priceMatch[1]}.${priceMatch[2]}`) : 0;
 
-        const oldEl = card.querySelector("s, del, [class*='before'], [class*='old'], [class*='was'], [class*='regular']");
-        const oldMatch = oldEl?.textContent?.match(/(\d+)[,.](\d{2})/);
+        const oldEl = card.querySelector("s, del, [class*='before'], [class*='old'], [class*='was'], [class*='regular'], [class*='normal']");
+        const oldMatch = oldEl?.textContent?.match(/€?\s*(\d+)[,.](\d{2})/) || oldEl?.textContent?.match(/(\d+)[,.](\d{2})\s*€?/);
         const originalPrice = oldMatch ? parseFloat(`${oldMatch[1]}.${oldMatch[2]}`) : newPrice;
 
         const image = card.querySelector("img")?.src
