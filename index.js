@@ -178,7 +178,7 @@ const STORE_URLS = {
 
 app.get("/rawproduct/:store", async (req, res) => {
   const storeMap = {
-    lidl: { url: "https://www.lidl.be/c/nl-BE/aanbiedingen-deze-week/a10082242", cookie: "#onetrust-accept-btn-handler" },
+    lidl: { url: "https://www.lidl.be/q/nl-BE/query/promo", cookie: "#onetrust-accept-btn-handler" },
     aldi: { url: "https://www.aldi.be/nl/onze-aanbiedingen.html", cookie: null },
     delhaize: { url: "https://www.delhaize.be/nl/promoties", cookie: "#didomi-notice-agree-button" },
   };
@@ -191,14 +191,19 @@ app.get("/rawproduct/:store", async (req, res) => {
     const page = await browser.newPage();
     const captured = [];
 
+    const allJsonUrls = [];
     page.on("response", async (response) => {
       const ct = response.headers()["content-type"] || "";
       if (!ct.includes("application/json")) return;
       try {
         const json = await response.json();
+        const url = response.url();
+        allJsonUrls.push(url.slice(0, 120));
         const arr = json.products || json.results || json.hits || json.items || json.data?.products || (Array.isArray(json) ? json : null);
         if (Array.isArray(arr) && arr.length > 0) {
-          captured.push({ url: response.url().slice(0, 100), count: arr.length, sample: arr[0] });
+          captured.push({ url: url.slice(0, 120), count: arr.length, sample: arr[0] });
+        } else if (typeof json === "object" && Object.keys(json).length > 0) {
+          captured.push({ url: url.slice(0, 120), topKeys: Object.keys(json).slice(0, 8), snippet: JSON.stringify(json).slice(0, 200) });
         }
       } catch { /* skip */ }
     });
@@ -212,7 +217,7 @@ app.get("/rawproduct/:store", async (req, res) => {
     await page.waitForTimeout(3000);
 
     await browser.close();
-    res.json(captured.length > 0 ? captured : { message: "No JSON products intercepted" });
+    res.json({ captured: captured.slice(0, 15), allJsonUrls });
   } catch (e) {
     if (browser) await browser.close().catch(() => {});
     res.status(500).json({ error: e.message });
