@@ -176,6 +176,49 @@ const STORE_URLS = {
   spar: "https://www.mijnspar.be/nl/promoties",
 };
 
+app.get("/rawproduct/:store", async (req, res) => {
+  const storeMap = {
+    lidl: { url: "https://www.lidl.be/c/nl-BE/promoties/s10007548", cookie: "#onetrust-accept-btn-handler" },
+    aldi: { url: "https://www.aldi.be/nl/onze-aanbiedingen.html", cookie: null },
+    delhaize: { url: "https://www.delhaize.be/nl/promoties", cookie: "#didomi-notice-agree-button" },
+  };
+  const cfg = storeMap[req.params.store];
+  if (!cfg) return res.status(404).json({ error: "Unknown store" });
+
+  let browser;
+  try {
+    browser = await launchBrowser();
+    const page = await browser.newPage();
+    const captured = [];
+
+    page.on("response", async (response) => {
+      const ct = response.headers()["content-type"] || "";
+      if (!ct.includes("application/json")) return;
+      try {
+        const json = await response.json();
+        const arr = json.products || json.results || json.hits || json.items || json.data?.products || (Array.isArray(json) ? json : null);
+        if (Array.isArray(arr) && arr.length > 0) {
+          captured.push({ url: response.url().slice(0, 100), count: arr.length, sample: arr[0] });
+        }
+      } catch { /* skip */ }
+    });
+
+    await page.goto(cfg.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    if (cfg.cookie) {
+      try { await page.waitForSelector(cfg.cookie, { timeout: 6000 }); await page.click(cfg.cookie); } catch { /* no banner */ }
+    }
+    await page.waitForTimeout(6000);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
+    await page.waitForTimeout(3000);
+
+    await browser.close();
+    res.json(captured.length > 0 ? captured : { message: "No JSON products intercepted" });
+  } catch (e) {
+    if (browser) await browser.close().catch(() => {});
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/sparjson", async (req, res) => {
   try {
     const apiUrl = "https://www.mijnspar.be/content/spar/nl/promoties/jcr:content/root/responsivegrid/responsivegrid/responsivegrid/filter_list_store_sp.model.json";
