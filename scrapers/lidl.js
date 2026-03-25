@@ -85,7 +85,7 @@ function mapLidlProduct(p, i) {
   };
 }
 
-async function scrapeLidl(browser, maxResults = 100) {
+async function scrapeLidl(browser, maxResults = 500) {
   const page = await browser.newPage();
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
@@ -119,20 +119,20 @@ async function scrapeLidl(browser, maxResults = 100) {
       console.log("[Lidl] Cookie geaccepteerd");
     } catch { /* geen banner */ }
 
-    // Wacht op volledige render + scroll voor lazy loading
-    await page.waitForTimeout(3000);
-    for (let i = 1; i <= 6; i++) {
-      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 6);
-      await page.waitForTimeout(1000);
+    // Scroll langzaam — triggert paginering API-calls in de SPA
+    await page.waitForTimeout(4000);
+    for (let i = 1; i <= 8; i++) {
+      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 8);
+      await page.waitForTimeout(1500);
     }
-    await page.waitForTimeout(2000);
+    // Geef de SPA extra tijd om alle pagina's te laden
+    await page.waitForTimeout(5000);
 
-    // 1. Probeer __NUXT_DATA__ — Nuxt 3 SSR state, bevat useProductStore met alle producten
+    // 1. Combineer SSR (__NUXT_DATA__) + API intercepts voor maximaal bereik
+    let ssrProducts = [];
     try {
       const nuxtDataText = await page.evaluate(() => document.getElementById("__NUXT_DATA__")?.textContent);
       if (nuxtDataText) {
-        // Nuxt 3 devalue formaat: flat array, references by index
-        // Resolve: volg integer-referenties en speciale markers
         const arr = JSON.parse(nuxtDataText);
         function resolve(idx, seen = new Set()) {
           if (idx === null || idx === undefined || typeof idx !== "number") return idx;
@@ -141,7 +141,6 @@ async function scrapeLidl(browser, maxResults = 100) {
           const val = arr[idx];
           if (val === null || val === undefined || typeof val !== "object") return val;
           if (Array.isArray(val)) {
-            // Speciale markers: ["ShallowReactive", n], ["Reactive", n], ["Set", ...], ["Map", ...]
             if (val[0] === "ShallowReactive" || val[0] === "Reactive") return resolve(val[1], new Set(seen));
             if (val[0] === "Set") return val.slice(1).map(i => resolve(i, new Set(seen)));
             if (val[0] === "Map") {
@@ -151,7 +150,6 @@ async function scrapeLidl(browser, maxResults = 100) {
             }
             return val.map(i => (typeof i === "number" ? resolve(i, new Set(seen)) : i));
           }
-          // Object: resolve all values
           const out = {};
           for (const [k, v] of Object.entries(val)) {
             out[k] = typeof v === "number" ? resolve(v, new Set(seen)) : v;
@@ -159,8 +157,6 @@ async function scrapeLidl(browser, maxResults = 100) {
           return out;
         }
 
-        // Zoek useProductStore index in pinia state
-        // Structuur: arr[0] = root, arr[1] = {pinia: N}, arr[N] = {useProductStore: M, ...}
         let productStoreIdx = null;
         for (let i = 0; i < Math.min(arr.length, 50); i++) {
           const v = arr[i];
@@ -171,39 +167,42 @@ async function scrapeLidl(browser, maxResults = 100) {
         }
 
         if (productStoreIdx !== null) {
-          console.log("[Lidl] useProductStore index:", productStoreIdx);
           const productStore = resolve(productStoreIdx);
-          console.log("[Lidl] productStore keys:", productStore ? Object.keys(productStore).slice(0, 10) : "null");
-
-          // Zoek een array van producten in de store
-          const findArr = (obj, depth = 0) => {
+          // Zoek de GROOTSTE product-array (niet de eerste)
+          const findLargest = (obj, depth = 0) => {
             if (depth > 6 || !obj || typeof obj !== "object") return null;
+            let best = null;
             if (Array.isArray(obj) && obj.length > 2 && obj[0] && typeof obj[0] === "object" &&
-                (obj[0].name || obj[0].title || obj[0].fullTitle || obj[0].price !== undefined)) return obj;
+                (obj[0].name || obj[0].title || obj[0].fullTitle || obj[0].price !== undefined)) {
+              best = obj;
+            }
             if (!Array.isArray(obj)) {
               for (const v of Object.values(obj)) {
-                const found = findArr(v, depth + 1);
-                if (found) return found;
+                const found = findLargest(v, depth + 1);
+                if (found && (!best || found.length > best.length)) best = found;
               }
             }
-            return null;
+            return best;
           };
-          const products = findArr(productStore);
-          if (products && products.length > 2) {
-            console.log("[Lidl] __NUXT_DATA__ products:", products.length);
-            return products.slice(0, maxResults).map(mapLidlProduct);
-          }
-          console.log("[Lidl] productStore geladen maar geen producten-array gevonden");
-        } else {
-          console.log("[Lidl] useProductStore niet gevonden in __NUXT_DATA__");
+          ssrProducts = findLargest(productStore) || [];
+          console.log("[Lidl] __NUXT_DATA__ products:", ssrProducts.length);
         }
       }
     } catch (e) { console.log("[Lidl] __NUXT_DATA__ fout:", e.message); }
 
-    // 2. API intercepts (voor als de pagina toch XHR gebruikt)
-    if (apiProducts.length > 0) {
-      console.log("[Lidl] API intercept:", apiProducts.length, "products");
-      return apiProducts.slice(0, maxResults).map(mapLidlProduct);
+    // 2. Combineer SSR + API intercepts, dedupliceer op naam
+    const allProducts = [...ssrProducts];
+    for (const p of apiProducts) {
+      const name = p.fullTitle || p.name || p.title || "";
+      if (name && !allProducts.some(x => (x.fullTitle || x.name || x.title) === name)) {
+        allProducts.push(p);
+      }
+    }
+    if (apiProducts.length > 0) console.log("[Lidl] API intercept:", apiProducts.length, "extra producten");
+
+    if (allProducts.length > 0) {
+      console.log("[Lidl] Totaal:", allProducts.length, "producten");
+      return allProducts.slice(0, maxResults).map(mapLidlProduct);
     }
 
     // 3. Log page info for debugging
