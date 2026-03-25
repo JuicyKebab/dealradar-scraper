@@ -219,6 +219,23 @@ app.get("/rawproduct/:store", async (req, res) => {
   }
 });
 
+app.get("/supabase-test", async (req, res) => {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return res.json({ ok: false, error: "Env vars ontbreken", SUPABASE_URL: !!url, SUPABASE_ANON_KEY: !!key });
+  try {
+    const r = await fetch(`${url}/rest/v1/cache`, {
+      method: "POST",
+      headers: { "apikey": key, "Authorization": `Bearer ${key}`, "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" },
+      body: JSON.stringify({ key: "railway-test", data: { ts: new Date().toISOString() }, updated_at: new Date().toISOString() }),
+    });
+    const body = await r.text();
+    res.json({ ok: r.ok, status: r.status, body: body || "(leeg = success)", SUPABASE_URL: url.slice(0, 30) + "..." });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 app.get("/sparjson", async (req, res) => {
   try {
     const apiUrl = "https://www.mijnspar.be/content/spar/nl/promoties/jcr:content/root/responsivegrid/responsivegrid/responsivegrid/filter_list_store_sp.model.json";
