@@ -69,24 +69,37 @@ function launchBrowser() {
 async function scrapeAll() {
   console.log("[DealRadar] Starting scrape...");
   const browser = await launchBrowser();
+  const deals = [];
 
-  const scrapers = [
+  // API-scrapers (geen browser nodig) parallel draaien
+  const apiScrapers = [
     { name: "Colruyt",      fn: () => scrapeColruyt(browser) },
     { name: "Albert Heijn", fn: () => scrapeAlbertHeijn(browser) },
-    { name: "Lidl",         fn: () => scrapeLidl(browser) },
-    { name: "Delhaize",     fn: () => scrapeDelhaize(browser) },
-    { name: "Carrefour",    fn: () => scrapeCarrefour(browser) },
-    { name: "Aldi",         fn: () => scrapeAldi(browser) },
     { name: "Spar",         fn: () => scrapeSpar(browser) },
   ];
-
-  // Run scrapers in parallel — each opens its own page in the shared browser
-  const results = await Promise.allSettled(scrapers.map(({ name, fn }) =>
+  const apiResults = await Promise.allSettled(apiScrapers.map(({ name, fn }) =>
     fn().then(r => { console.log(`[DealRadar] ${name}: ${r.length} deals`); return r; })
        .catch(err => { console.error(`[DealRadar] ${name} FAILED:`, err.message); return []; })
   ));
+  deals.push(...apiResults.flatMap(r => r.status === "fulfilled" ? r.value : []));
 
-  const deals = results.flatMap(r => r.status === "fulfilled" ? r.value : []);
+  // Playwright-scrapers sequentieel — voorkomt memory-problemen
+  const playwrightScrapers = [
+    { name: "Lidl",      fn: () => scrapeLidl(browser) },
+    { name: "Aldi",      fn: () => scrapeAldi(browser) },
+    { name: "Delhaize",  fn: () => scrapeDelhaize(browser) },
+    { name: "Carrefour", fn: () => scrapeCarrefour(browser) },
+  ];
+  for (const { name, fn } of playwrightScrapers) {
+    try {
+      const r = await fn();
+      console.log(`[DealRadar] ${name}: ${r.length} deals`);
+      deals.push(...r);
+    } catch (err) {
+      console.error(`[DealRadar] ${name} FAILED:`, err.message);
+    }
+  }
+
   await browser.close();
   console.log(`[DealRadar] Totaal: ${deals.length} deals`);
   await saveToSupabase(deals);
@@ -410,11 +423,11 @@ app.get("/lidl-test", async (req, res) => {
   }
 });
 
-// Forceer verse scrape (reset cache)
-app.get("/force-refresh", async (req, res) => {
-  cache = null;
-  cacheTime = 0;
-  res.json({ ok: true, message: "Cache geleegd, volgende /api/deals start verse scrape" });
+// Forceer verse scrape op achtergrond (behoudt stale cache)
+app.get("/force-refresh", (req, res) => {
+  cacheTime = 0; // markeer als verlopen maar gooi stale data niet weg
+  refreshInBackground();
+  res.json({ ok: true, message: "Refresh gestart op achtergrond", currentDealCount: cache?.length ?? 0 });
 });
 
 app.listen(PORT, () => {
