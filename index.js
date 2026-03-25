@@ -178,7 +178,7 @@ const STORE_URLS = {
 
 app.get("/rawproduct/:store", async (req, res) => {
   const storeMap = {
-    lidl: { url: "https://www.lidl.be/q/nl-BE/query/promo", cookie: "#onetrust-accept-btn-handler" },
+    lidl: { url: "https://www.lidl.be/c/nl-BE/aanbiedingen-deze-week/a10082242", cookie: "#onetrust-accept-btn-handler" },
     aldi: { url: "https://www.aldi.be/nl/onze-aanbiedingen.html", cookie: null },
     delhaize: { url: "https://www.delhaize.be/nl/promoties", cookie: "#didomi-notice-agree-button" },
   };
@@ -212,12 +212,37 @@ app.get("/rawproduct/:store", async (req, res) => {
     if (cfg.cookie) {
       try { await page.waitForSelector(cfg.cookie, { timeout: 6000 }); await page.click(cfg.cookie); } catch { /* no banner */ }
     }
-    await page.waitForTimeout(6000);
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
     await page.waitForTimeout(3000);
+    for (let i = 1; i <= 4; i++) {
+      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 4);
+      await page.waitForTimeout(1000);
+    }
+    await page.waitForTimeout(2000);
+
+    // Extract __NEXT_DATA__ for SSR pages
+    let nextData = null;
+    try {
+      const raw = await page.evaluate(() => document.getElementById("__NEXT_DATA__")?.textContent);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Find any array with > 2 items that looks like products
+        const findArr = (obj, depth = 0) => {
+          if (depth > 10 || !obj || typeof obj !== "object") return null;
+          if (Array.isArray(obj) && obj.length > 2 && obj[0] && typeof obj[0] === "object") return { length: obj.length, sample: obj[0] };
+          if (!Array.isArray(obj)) {
+            for (const [k, v] of Object.entries(obj)) {
+              const found = findArr(v, depth + 1);
+              if (found && found.length > 5) return { key: k, ...found };
+            }
+          }
+          return null;
+        };
+        nextData = findArr(parsed) || { topKeys: Object.keys(parsed) };
+      }
+    } catch { /* skip */ }
 
     await browser.close();
-    res.json({ captured: captured.slice(0, 15), allJsonUrls });
+    res.json({ captured: captured.slice(0, 15), allJsonUrls, nextData });
   } catch (e) {
     if (browser) await browser.close().catch(() => {});
     res.status(500).json({ error: e.message });

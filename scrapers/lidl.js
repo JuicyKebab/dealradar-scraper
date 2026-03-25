@@ -62,12 +62,33 @@ function getPrice(v) {
   return parseFloat(v) || 0;
 }
 
+function mapLidlProduct(p, i) {
+  const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || 0;
+  const orig = getPrice(p.regularPrice) || getPrice(p.originalPrice) || getPrice(p.fullPrice)
+    || getPrice(p.price?.regular) || getPrice(p.wasPrice) || getPrice(p.normalPrice)
+    || getPrice(p.basePrice) || curr;
+  const savings = orig > curr && curr > 0 ? Math.round((1 - curr / orig) * 100) : 0;
+  return {
+    id: 4000 + i,
+    store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
+    item: p.fullTitle || p.name || p.title || p.productName || "Onbekend",
+    deal: savings > 0 ? `-${savings}%` : (p.promotionText || p.discount || "Aanbieding"),
+    category: p.category || p.categoryName || "Overig",
+    originalPrice: orig, newPrice: curr, savings,
+    emoji: categoryToEmoji(p.category || p.categoryName),
+    validUntil: isoToDutch(p.endDate || p.validUntil || p.promotionEndDate),
+    hot: savings >= 30,
+    description: p.description || "",
+    image: p.image || p.imageUrl || p.thumbnail || p.images?.[0]?.url || null,
+  };
+}
+
 async function scrapeLidl(browser, maxResults = 100) {
   const page = await browser.newPage();
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
-    // Intercept ALL JSON responses looking for product data
+    // Intercept API responses — useful if the SSR page also fires XHR for additional pages
     const apiProducts = [];
     page.on("response", async (response) => {
       const ct = response.headers()["content-type"] || "";
@@ -84,108 +105,59 @@ async function scrapeLidl(browser, maxResults = 100) {
       } catch { /* skip */ }
     });
 
-    // Gebruik de /q/nl-BE/query/promo pagina — toont alle promos, niet alleen wekelijkse
-    const promoUrl = "https://www.lidl.be/q/nl-BE/query/promo";
+    // Gebruik de SSR weekaanbieding-pagina — product data zit in __NEXT_DATA__ (server-rendered)
+    // zodat Railway's US IP geen probleem is (geen client-side API call nodig)
+    const promoUrl = await getLidlPromoUrl();
     await page.goto(promoUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-    console.log("[Lidl] Loaded:", promoUrl);
+    console.log("[Lidl] Loaded SSR page:", promoUrl);
 
-    // Accepteer cookies — meerdere selectors voor verschillende pagina's
-    const cookieSelectors = [
-      "#onetrust-accept-btn-handler",
-      "button[data-testid='uc-accept-all-button']",
-      "button.accept-all",
-      "[id*='accept'][id*='all']",
-    ];
-    for (const sel of cookieSelectors) {
-      try {
-        await page.waitForSelector(sel, { timeout: 4000 });
-        await page.click(sel);
-        console.log("[Lidl] Cookie accepted via:", sel);
-        break;
-      } catch { /* probeer volgende */ }
+    // Cookie banner wegklikken zodat lazy-load ook werkt
+    try {
+      await page.waitForSelector("#onetrust-accept-btn-handler", { timeout: 6000 });
+      await page.click("#onetrust-accept-btn-handler");
+      console.log("[Lidl] Cookie geaccepteerd");
+    } catch { /* geen banner */ }
+
+    // Wacht op volledige render + scroll voor lazy loading
+    await page.waitForTimeout(3000);
+    for (let i = 1; i <= 6; i++) {
+      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 6);
+      await page.waitForTimeout(1000);
     }
+    await page.waitForTimeout(2000);
 
-    // Wacht op product laden na cookie acceptatie
-    await page.waitForTimeout(5000);
-
-    // Scroll om lazy loading te triggeren
-    for (let i = 1; i <= 3; i++) {
-      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 3);
-      await page.waitForTimeout(2000);
-    }
-
-    // Extra wacht als producten nog laden
-    if (apiProducts.length === 0) {
-      await page.waitForTimeout(4000);
-    }
-
-    // Check API intercepts
-    if (apiProducts.length > 0) {
-      console.log("[Lidl] API intercept:", apiProducts.length, "products");
-      if (apiProducts[0]) console.log("[Lidl] Prijs keys:", Object.keys(apiProducts[0]).filter(k => k.toLowerCase().includes("price") || k.toLowerCase().includes("prijs")));
-      return apiProducts.slice(0, maxResults).map((p, i) => {
-        const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || 0;
-        const orig = getPrice(p.regularPrice) || getPrice(p.originalPrice) || getPrice(p.fullPrice)
-          || getPrice(p.price?.regular) || getPrice(p.wasPrice) || getPrice(p.normalPrice)
-          || getPrice(p.basePrice) || curr;
-        const savings = orig > curr && curr > 0 ? Math.round((1 - curr / orig) * 100) : 0;
-        return {
-          id: 4000 + i,
-          store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
-          item: p.fullTitle || p.name || p.title || p.productName || "Onbekend",
-          deal: savings > 0 ? `-${savings}%` : (p.promotionText || p.discount || "Aanbieding"),
-          category: p.category || p.categoryName || "Overig",
-          originalPrice: orig, newPrice: curr, savings,
-          emoji: categoryToEmoji(p.category || p.categoryName),
-          validUntil: isoToDutch(p.endDate || p.validUntil || p.promotionEndDate),
-          hot: savings >= 30,
-          description: p.description || "",
-          image: p.image || p.imageUrl || p.thumbnail || p.images?.[0]?.url || null,
-        };
-      });
-    }
-
-    // Try __NEXT_DATA__ embedded product data
+    // 1. Probeer __NEXT_DATA__ — bevat alle SSR product data
     try {
       const nextDataText = await page.evaluate(() => document.getElementById("__NEXT_DATA__")?.textContent);
       if (nextDataText) {
         const parsed = JSON.parse(nextDataText);
         const findProducts = (obj, depth = 0) => {
-          if (depth > 8 || !obj || typeof obj !== "object") return null;
-          if (Array.isArray(obj) && obj.length > 2 && (obj[0]?.name || obj[0]?.title || obj[0]?.fullTitle)) return obj;
+          if (depth > 10 || !obj || typeof obj !== "object") return null;
+          if (Array.isArray(obj) && obj.length > 2 && (obj[0]?.name || obj[0]?.title || obj[0]?.fullTitle || obj[0]?.price)) return obj;
           if (!Array.isArray(obj)) {
             for (const val of Object.values(obj)) {
               const found = findProducts(val, depth + 1);
-              if (found) return found;
+              if (found && found.length > 5) return found;
             }
           }
           return null;
         };
         const products = findProducts(parsed);
-        if (products && products.length > 0) {
+        if (products && products.length > 2) {
           console.log("[Lidl] __NEXT_DATA__ products:", products.length);
-          return products.slice(0, maxResults).map((p, i) => {
-            const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || 0;
-            const orig = getPrice(p.regularPrice) || getPrice(p.originalPrice) || getPrice(p.fullPrice)
-              || getPrice(p.wasPrice) || getPrice(p.normalPrice) || curr;
-            const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
-            return {
-              id: 4000 + i,
-              store: "Lidl", storeColor: "#0050AA", storeLogo: "L",
-              item: p.fullTitle || p.name || p.title || "Onbekend",
-              deal: savings > 0 ? `-${savings}%` : (p.promotionText || "Aanbieding"),
-              category: p.category || p.categoryName || "Overig",
-              originalPrice: orig, newPrice: curr, savings,
-              emoji: categoryToEmoji(p.category || p.categoryName),
-              validUntil: isoToDutch(p.endDate || p.validUntil),
-              hot: savings >= 30, description: p.description || "", image: p.image || p.imageUrl || null,
-            };
-          });
+          return products.slice(0, maxResults).map(mapLidlProduct);
         }
+        console.log("[Lidl] __NEXT_DATA__ aanwezig maar geen producten gevonden");
       }
-    } catch { /* continue */ }
+    } catch (e) { console.log("[Lidl] __NEXT_DATA__ fout:", e.message); }
 
-    // Log page info for debugging
+    // 2. API intercepts (voor als de pagina toch XHR gebruikt)
+    if (apiProducts.length > 0) {
+      console.log("[Lidl] API intercept:", apiProducts.length, "products");
+      return apiProducts.slice(0, maxResults).map(mapLidlProduct);
+    }
+
+    // 3. Log page info for debugging
     const pageInfo = await page.evaluate(() => ({
       url: location.href,
       title: document.title,
