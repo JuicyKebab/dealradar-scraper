@@ -231,29 +231,58 @@ app.get("/rawproduct/:store", async (req, res) => {
     }
     await page.waitForTimeout(5000);
 
-    // Extract embedded SSR data (Next.js / Nuxt / etc.)
+    // Extract eerste product uit __NUXT_DATA__ met volledige structuur
     let nextData = null;
     try {
       nextData = await page.evaluate(() => {
-        // Check for __NUXT_DATA__ (Nuxt 3)
         const nuxtEl = document.getElementById("__NUXT_DATA__");
-        if (nuxtEl) return { type: "nuxt", length: nuxtEl.textContent.length, snippet: nuxtEl.textContent.slice(0, 500) };
-        // Check for __NEXT_DATA__ (Next.js)
-        const nextEl = document.getElementById("__NEXT_DATA__");
-        if (nextEl) return { type: "next", length: nextEl.textContent.length, snippet: nextEl.textContent.slice(0, 500) };
-        // Check for inline JSON scripts
-        const scripts = Array.from(document.querySelectorAll("script[type='application/json']"));
-        if (scripts.length) return { type: "json-scripts", count: scripts.length, snippet: scripts[0].textContent.slice(0, 300) };
-        // Dump page title and any window.__NUXT__ hint
+        if (!nuxtEl) return { type: "none" };
+        const arr = JSON.parse(nuxtEl.textContent);
+        function resolve(idx, seen = new Set()) {
+          if (idx === null || idx === undefined || typeof idx !== "number") return idx;
+          if (seen.has(idx)) return null;
+          seen.add(idx);
+          const val = arr[idx];
+          if (val === null || val === undefined || typeof val !== "object") return val;
+          if (Array.isArray(val)) {
+            if (val[0] === "ShallowReactive" || val[0] === "Reactive") return resolve(val[1], new Set(seen));
+            if (val[0] === "Set") return val.slice(1).map(i => resolve(i, new Set(seen)));
+            return val.map(i => (typeof i === "number" ? resolve(i, new Set(seen)) : i));
+          }
+          const out = {};
+          for (const [k, v] of Object.entries(val)) {
+            out[k] = typeof v === "number" ? resolve(v, new Set(seen)) : v;
+          }
+          return out;
+        }
+        // Vind useProductStore
+        let storeIdx = null;
+        for (let i = 0; i < Math.min(arr.length, 50); i++) {
+          const v = arr[i];
+          if (v && typeof v === "object" && !Array.isArray(v) && "useProductStore" in v) {
+            storeIdx = v["useProductStore"]; break;
+          }
+        }
+        if (storeIdx === null) return { type: "nuxt", error: "geen productStore" };
+        const store = resolve(storeIdx);
+        // Vind de eerste product-array
+        function findFirst(obj, depth = 0) {
+          if (depth > 5 || !obj || typeof obj !== "object") return null;
+          if (Array.isArray(obj) && obj.length > 0 && obj[0] && typeof obj[0] === "object") return obj;
+          if (!Array.isArray(obj)) { for (const v of Object.values(obj)) { const f = findFirst(v, depth+1); if (f) return f; } }
+          return null;
+        }
+        const products = findFirst(store);
         return {
-          type: "none",
-          title: document.title,
-          url: location.href,
-          bodyLength: document.body?.innerHTML?.length,
-          bodySnippet: document.body?.innerHTML?.slice(0, 1000),
+          type: "nuxt",
+          storeIdx,
+          storeKeys: store ? Object.keys(store) : [],
+          productCount: products?.length,
+          firstProduct: products?.[0],
+          secondProduct: products?.[1],
         };
       });
-    } catch { /* skip */ }
+    } catch (e) { nextData = { error: e.message }; }
 
     await browser.close();
     res.json({ cookieClicked, captured: captured.slice(0, 20), allLidlUrls: allUrls.slice(0, 30), nextData });
