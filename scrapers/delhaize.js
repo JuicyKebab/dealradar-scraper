@@ -56,7 +56,8 @@ async function fetchDelhaizeAPI() {
   // Delhaize OCAPI product search — promoties filter
   const endpoints = [
     "https://www.delhaize.be/api/2.0/products?q=*&refinements=c_isPromo%3Dtrue&count=100&locale=nl_BE",
-    "https://www.delhaize.be/on/demandware.store/Sites-DelhBE-Site/nl_BE/Search-Show?q=*&srule=best-matches&pmid=promotions&sz=100&format=ajax",
+    "https://www.delhaize.be/on/demandware.store/Sites-DelhBE-Site/nl_BE/Product-GetPromotions?count=100",
+    "https://www.delhaize.be/on/demandware.store/Sites-DelhBE-Site/nl_BE/Search-Show?q=promo&srule=best-matches&sz=100&format=ajax",
   ];
 
   for (const url of endpoints) {
@@ -67,7 +68,7 @@ async function fetchDelhaizeAPI() {
       if (!ct.includes("application/json")) continue;
       const data = await res.json();
       const products = data.hits || data.products || data.results || data.data?.products || [];
-      if (products.length > 2) {
+      if (products.length >= 1) {
         console.log("[Delhaize] API:", url.slice(0, 60), "->", products.length);
         return products;
       }
@@ -102,8 +103,10 @@ async function scrapeDelhaize(browser, maxResults = 50) {
           json.data?.promotionPage?.products,
           json.data?.searchProducts?.results,
           json.data?.promotedProducts,
+          json.data?.productSearch?.productHits,
           json.hits,
-        ].filter(a => Array.isArray(a) && a.length > 2
+          Array.isArray(json) ? json : null,
+        ].filter(a => Array.isArray(a) && a.length >= 1
           && (a[0]?.name || a[0]?.title || a[0]?.productName)
           && typeof (a[0]?.name || a[0]?.title || a[0]?.productName) === "string");
 

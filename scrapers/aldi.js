@@ -40,6 +40,7 @@ async function scrapeAldi(browser, maxResults = 15) {
 
     // Try correct Aldi Belgium URLs
     const urls = [
+      "https://www.aldi.be/nl/weekaanbieding.html",
       "https://www.aldi.be/nl/onze-aanbiedingen.html",
       "https://www.aldi.be/nl/aanbiedingen.html",
       "https://www.aldi.be/nl/",
@@ -61,7 +62,13 @@ async function scrapeAldi(browser, maxResults = 15) {
       await page.goto("https://www.aldi.be/nl/", { waitUntil: "domcontentloaded", timeout: 30000 });
     }
 
-    await page.waitForTimeout(4000);
+    // Scroll om lazy-loading te triggeren
+    await page.waitForTimeout(3000);
+    for (let i = 1; i <= 4; i++) {
+      await page.evaluate((p) => window.scrollTo(0, document.body.scrollHeight * p), i / 4);
+      await page.waitForTimeout(1000);
+    }
+    await page.waitForTimeout(3000);
 
     // Check API intercepts — alleen gebruiken als er echte prijzen in zitten
     if (apiData.length > 0) {

@@ -53,8 +53,10 @@ async function scrapeLidl(browser, maxResults = 1000) {
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
+    let cookieAccepted = false;
     const intercepted = [];
     page.on("response", async (response) => {
+      if (!cookieAccepted) return; // Negeer responses vóór cookie accept (lege resultaten)
       const url = response.url();
       const ct = response.headers()["content-type"] || "";
       if (!url.includes("lidl.be/q/api") && !ct.includes("mindshift")) return;
@@ -74,12 +76,14 @@ async function scrapeLidl(browser, maxResults = 1000) {
       await page.click("#onetrust-accept-btn-handler");
       console.log("[Lidl] Cookie geaccepteerd");
     } catch { /* geen banner */ }
+    cookieAccepted = true;
 
-    // Wacht op de search API — max 20 seconden
+    // Wacht even zodat pagina herlaadt na cookie accept, dan op search API
+    await page.waitForTimeout(3000);
     try {
       await page.waitForResponse(
         r => r.url().includes("lidl.be/q/api") && r.status() === 200,
-        { timeout: 20000 }
+        { timeout: 25000 }
       );
     } catch { console.log("[Lidl] Search API timeout"); }
 
