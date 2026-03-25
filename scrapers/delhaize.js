@@ -94,10 +94,21 @@ async function scrapeDelhaize(browser, maxResults = 15) {
 
     // Accept cookie consent — blocks GraphQL product queries if not dismissed
     try {
-      await page.waitForSelector("button:has-text('Alles accepteren'), button:has-text('Accepteer alles'), [data-testid*='accept'], button[id*='accept']", { timeout: 5000 });
-      await page.click("button:has-text('Alles accepteren'), button:has-text('Accepteer alles'), [data-testid*='accept'], button[id*='accept']");
+      const cookieSelectors = [
+        "#didomi-notice-agree-button",
+        "[data-didomi-action='agree-to-all']",
+        "button:has-text('Alles accepteren')",
+        "button:has-text('Accepteer alles')",
+        "button:has-text('Tout accepter')",
+        "button:has-text('Akkoord')",
+        "[class*='acceptAll']",
+        "[class*='accept-all']",
+        "[data-testid*='accept']",
+      ];
+      await page.waitForSelector(cookieSelectors.join(", "), { timeout: 6000 });
+      await page.click(cookieSelectors.join(", "));
       console.log("[Delhaize] Cookie banner accepted");
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(3000);
     } catch { /* no banner or already accepted */ }
 
     // Scroll to trigger lazy loading and wait for React to load products

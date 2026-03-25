@@ -40,9 +40,9 @@ async function scrapeAldi(browser, maxResults = 15) {
 
     // Try correct Aldi Belgium URLs
     const urls = [
+      "https://www.aldi.be/nl/onze-aanbiedingen.html",
       "https://www.aldi.be/nl/aanbiedingen.html",
       "https://www.aldi.be/nl/",
-      "https://www.aldi.be/nl/producten/aanbiedingen.html",
     ];
 
     let loaded = false;

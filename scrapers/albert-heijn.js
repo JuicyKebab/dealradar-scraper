@@ -52,7 +52,15 @@ async function scrapeAlbertHeijn(browser, maxResults = 15) {
       } catch { /* skip */ }
     });
 
-    await page.goto("https://www.ah.nl/bonus", { waitUntil: "domcontentloaded", timeout: 45000 });
+    // Try Belgian site first, fall back to Netherlands
+    let ahLoaded = false;
+    for (const url of ["https://www.ah.be/aanbiedingen", "https://www.ah.be/bonus", "https://www.ah.nl/bonus"]) {
+      try {
+        const r = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        if (r?.status() < 400) { console.log("[AH] Loaded:", url); ahLoaded = true; break; }
+      } catch { /* try next */ }
+    }
+    if (!ahLoaded) return [];
 
     // Accept cookie consent if present
     try {
@@ -110,7 +118,9 @@ async function scrapeAlbertHeijn(browser, maxResults = 15) {
           if (depth > 8 || !obj || typeof obj !== "object") return null;
           if (Array.isArray(obj) && obj.length > 2) {
             const first = obj[0];
-            if (first?.title || first?.description || first?.name) return obj;
+            // Require a real name field — not just an id
+            const name = first?.title || first?.description || first?.name || first?.productName;
+            if (name && typeof name === "string" && name.length > 2 && name.length < 300) return obj;
           }
           if (!Array.isArray(obj)) {
             for (const val of Object.values(obj)) {
