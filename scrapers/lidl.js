@@ -105,11 +105,10 @@ async function scrapeLidl(browser, maxResults = 100) {
       } catch { /* skip */ }
     });
 
-    // Gebruik de SSR weekaanbieding-pagina — product data zit in __NEXT_DATA__ (server-rendered)
-    // zodat Railway's US IP geen probleem is (geen client-side API call nodig)
-    const promoUrl = await getLidlPromoUrl();
+    // SPA zoekpagina — vuurt product-search API (werkt nu met EU IP via Railway Europe West)
+    const promoUrl = "https://www.lidl.be/q/nl-BE/query/promo";
     await page.goto(promoUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
-    console.log("[Lidl] Loaded SSR page:", promoUrl);
+    console.log("[Lidl] Loaded:", promoUrl);
 
     // Cookie banner wegklikken zodat lazy-load ook werkt
     try {
