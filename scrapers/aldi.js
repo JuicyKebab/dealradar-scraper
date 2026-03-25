@@ -63,28 +63,34 @@ async function scrapeAldi(browser, maxResults = 15) {
 
     await page.waitForTimeout(4000);
 
-    // Check API intercepts
+    // Check API intercepts — alleen gebruiken als er echte prijzen in zitten
     if (apiData.length > 0) {
       const best = apiData.sort((a, b) => b.items.length - a.items.length)[0];
-      console.log("[Aldi] API intercept:", best.url, "->", best.items.length, "items");
-      return best.items.slice(0, maxResults).map((p, i) => {
-        const orig = p.regularPrice || p.originalPrice || p.price || 0;
-        const curr = p.salePrice || p.promoPrice || p.price || orig;
-        const savings = orig > curr ? Math.round((1 - curr / orig) * 100) : 0;
-        return {
-          id: 7000 + i,
-          store: "Aldi", storeColor: "#1E5AA8", storeLogo: "AL",
-          item: p.name || p.title || p.productName || "Onbekend",
-          deal: savings > 0 ? `-${savings}%` : (p.promotionLabel || "Aanbieding"),
-          category: p.category || p.categoryName || "Overig",
-          originalPrice: orig, newPrice: curr, savings,
-          emoji: "🛒",
-          validUntil: isoToDutch(p.endDate || p.validUntil),
-          hot: savings >= 30,
-          description: p.description || "",
-          image: p.image || p.imageUrl || p.thumbnail || null,
-        };
-      });
+      const itemsWithPrice = best.items.filter(p =>
+        (p.regularPrice || p.originalPrice || p.price || p.salePrice || p.promoPrice) > 0
+      );
+      if (itemsWithPrice.length > 0) {
+        console.log("[Aldi] API intercept met prijzen:", best.url, "->", itemsWithPrice.length, "items");
+        return itemsWithPrice.slice(0, maxResults).map((p, i) => {
+          const orig = p.regularPrice || p.originalPrice || p.price || 0;
+          const curr = p.salePrice || p.promoPrice || p.price || orig;
+          const savings = orig > curr ? Math.round((1 - curr / orig) * 100) : 0;
+          return {
+            id: 7000 + i,
+            store: "Aldi", storeColor: "#1E5AA8", storeLogo: "AL",
+            item: p.name || p.title || p.productName || "Onbekend",
+            deal: savings > 0 ? `-${savings}%` : (p.promotionLabel || "Aanbieding"),
+            category: p.category || p.categoryName || "Overig",
+            originalPrice: orig, newPrice: curr, savings,
+            emoji: "🛒",
+            validUntil: isoToDutch(p.endDate || p.validUntil),
+            hot: savings >= 30,
+            description: p.description || "",
+            image: p.image || p.imageUrl || p.thumbnail || null,
+          };
+        });
+      }
+      console.log("[Aldi] API zonder prijzen, val terug op HTML scraper");
     }
 
     // HTML scraping — log the actual page URL and classes found
