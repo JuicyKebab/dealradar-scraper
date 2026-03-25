@@ -59,11 +59,29 @@ async function scrapeAll() {
   return deals;
 }
 
+let refreshing = false;
+
+function refreshInBackground() {
+  if (refreshing) return;
+  refreshing = true;
+  scrapeAll()
+    .then(deals => { cache = deals; cacheTime = Date.now(); })
+    .catch(err => console.error("[DealRadar] Background refresh failed:", err.message))
+    .finally(() => { refreshing = false; });
+}
+
 app.get("/api/deals", async (req, res) => {
   try {
     if (cache && Date.now() - cacheTime < CACHE_TTL) {
       return res.json(cache);
     }
+    // Cache expired — return stale data immediately, refresh in background
+    if (cache) {
+      res.json(cache);
+      refreshInBackground();
+      return;
+    }
+    // First boot — must wait
     const deals = await scrapeAll();
     cache = deals;
     cacheTime = Date.now();
