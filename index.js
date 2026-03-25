@@ -191,33 +191,45 @@ app.get("/rawproduct/:store", async (req, res) => {
     const page = await browser.newPage();
     const captured = [];
 
-    const allJsonUrls = [];
+    const allUrls = []; // ALL responses, not just JSON
     page.on("response", async (response) => {
+      const url = response.url();
       const ct = response.headers()["content-type"] || "";
-      if (!ct.includes("application/json")) return;
+      // Log all lidl.be responses for debugging
+      if (url.includes("lidl.be") || ct.includes("application/json")) {
+        allUrls.push({ url: url.slice(0, 150), ct: ct.slice(0, 40), status: response.status() });
+      }
+      if (!ct.includes("application/json") && !ct.includes("mindshift") && !ct.includes("text/plain")) return;
       try {
-        const json = await response.json();
-        const url = response.url();
-        allJsonUrls.push(url.slice(0, 120));
-        const arr = json.products || json.results || json.hits || json.items || json.data?.products || (Array.isArray(json) ? json : null);
+        const body = await response.text();
+        const json = JSON.parse(body);
+        const arr = json.products || json.results || json.hits || json.items
+          || json.gridElements || json.searchResult?.gridElements
+          || json.data?.products || (Array.isArray(json) ? json : null);
         if (Array.isArray(arr) && arr.length > 0) {
-          captured.push({ url: url.slice(0, 120), count: arr.length, sample: arr[0] });
-        } else if (typeof json === "object" && Object.keys(json).length > 0) {
-          captured.push({ url: url.slice(0, 120), topKeys: Object.keys(json).slice(0, 8), snippet: JSON.stringify(json).slice(0, 200) });
+          captured.push({ url: url.slice(0, 150), count: arr.length, sample: arr[0] });
+        } else if (typeof json === "object" && Object.keys(json).length > 0 && !url.includes("cookielaw") && !url.includes("onetrust") && !url.includes("batch.com")) {
+          captured.push({ url: url.slice(0, 150), topKeys: Object.keys(json).slice(0, 10), snippet: JSON.stringify(json).slice(0, 300) });
         }
       } catch { /* skip */ }
     });
 
     await page.goto(cfg.url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    let cookieClicked = false;
     if (cfg.cookie) {
-      try { await page.waitForSelector(cfg.cookie, { timeout: 6000 }); await page.click(cfg.cookie); } catch { /* no banner */ }
+      try {
+        await page.waitForSelector(cfg.cookie, { timeout: 10000 });
+        await page.click(cfg.cookie);
+        cookieClicked = true;
+      } catch { /* no banner */ }
     }
-    await page.waitForTimeout(3000);
-    for (let i = 1; i <= 4; i++) {
-      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 4);
-      await page.waitForTimeout(1000);
+    // Wacht langer na cookie accept — SPA herlaadt soms de pagina
+    await page.waitForTimeout(cookieClicked ? 8000 : 3000);
+    for (let i = 1; i <= 6; i++) {
+      await page.evaluate((pct) => window.scrollTo(0, document.body.scrollHeight * pct), i / 6);
+      await page.waitForTimeout(1500);
     }
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(5000);
 
     // Extract __NEXT_DATA__ for SSR pages
     let nextData = null;
@@ -242,7 +254,7 @@ app.get("/rawproduct/:store", async (req, res) => {
     } catch { /* skip */ }
 
     await browser.close();
-    res.json({ captured: captured.slice(0, 15), allJsonUrls, nextData });
+    res.json({ cookieClicked, captured: captured.slice(0, 20), allLidlUrls: allUrls.slice(0, 30), nextData });
   } catch (e) {
     if (browser) await browser.close().catch(() => {});
     res.status(500).json({ error: e.message });
