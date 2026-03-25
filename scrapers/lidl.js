@@ -32,6 +32,12 @@ const LIDL_URLS = [
   "https://www.lidl.be/c/nl-BE/aanbiedingen",
 ];
 
+function getPrice(v) {
+  if (typeof v === "number") return v;
+  if (v && typeof v === "object") return v.price || v.amount || v.value || 0;
+  return parseFloat(v) || 0;
+}
+
 async function scrapeLidl(browser, maxResults = 15) {
   const page = await browser.newPage();
   try {
@@ -86,8 +92,8 @@ async function scrapeLidl(browser, maxResults = 15) {
     if (apiProducts.length > 0) {
       console.log("[Lidl] API intercept:", apiProducts.length, "products");
       return apiProducts.slice(0, maxResults).map((p, i) => {
-        const orig = p.regularPrice || p.originalPrice || p.price?.regular || p.fullPrice || 0;
-        const curr = p.price || p.currentPrice || p.price?.current || p.promotionPrice || orig;
+        const orig = getPrice(p.regularPrice || p.originalPrice || p.fullPrice) || getPrice(p.price?.regular) || 0;
+        const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || orig;
         const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
         return {
           id: 4000 + i,
@@ -125,8 +131,8 @@ async function scrapeLidl(browser, maxResults = 15) {
         if (products && products.length > 0) {
           console.log("[Lidl] __NEXT_DATA__ products:", products.length);
           return products.slice(0, maxResults).map((p, i) => {
-            const orig = p.regularPrice || p.originalPrice || p.price?.regular || p.fullPrice || 0;
-            const curr = p.price || p.currentPrice || p.price?.current || p.promotionPrice || orig;
+            const orig = getPrice(p.regularPrice || p.originalPrice || p.fullPrice) || getPrice(p.price?.regular) || 0;
+            const curr = getPrice(p.price) || getPrice(p.currentPrice) || getPrice(p.promotionPrice) || orig;
             const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
             return {
               id: 4000 + i,
