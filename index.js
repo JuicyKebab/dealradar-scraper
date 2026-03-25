@@ -384,6 +384,39 @@ app.get("/dump/:store", async (req, res) => {
   }
 });
 
+// Test Lidl API direct vanaf Railway
+app.get("/lidl-test", async (req, res) => {
+  try {
+    const url = "https://www.lidl.be/q/api/query/promo?assortment=BE&locale=nl_BE&version=v2.0.0&size=5";
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "nl-BE,nl;q=0.9",
+        "Referer": "https://www.lidl.be/q/nl-BE/query/promo",
+      },
+    });
+    const data = await r.json();
+    const item0 = data.items?.[0]?.gridbox?.data;
+    res.json({
+      status: r.status,
+      numFound: data.numFound,
+      type: data.type,
+      itemCount: data.items?.length,
+      firstItem: item0 ? { title: item0.title, price: item0.price?.price, oldPrice: item0.price?.oldPrice } : null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Forceer verse scrape (reset cache)
+app.get("/force-refresh", async (req, res) => {
+  cache = null;
+  cacheTime = 0;
+  res.json({ ok: true, message: "Cache geleegd, volgende /api/deals start verse scrape" });
+});
+
 app.listen(PORT, () => {
   console.log(`[DealRadar] Scraper service running on port ${PORT}`);
   // Laad eerst Supabase cache — vermijd onnodige scrape bij herstart
