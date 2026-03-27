@@ -20,22 +20,29 @@ async function scrapeAldi(browser, maxResults = 15) {
   try {
     await page.setExtraHTTPHeaders({ "Accept-Language": "nl-BE,nl;q=0.9" });
 
-    // Intercept API calls (Algolia or AEM JSON)
+    // Intercept ALL JSON responses — log elke URL zodat we de price-API kunnen vinden
     const apiData = [];
     page.on("response", async (response) => {
       const url = response.url();
       const ct = response.headers()["content-type"] || "";
       if (!ct.includes("application/json")) return;
-
-      // Algolia product index or AEM product API
-      if (url.includes("algolia") || url.includes("product") || url.includes("aanbieding") || url.includes("promo")) {
-        try {
-          const json = await response.json();
-          // Algolia returns hits array
-          const items = json.hits || json.results?.[0]?.hits || json.products || json.results || [];
-          if (items.length > 2) apiData.push({ url, items });
-        } catch { /* skip */ }
-      }
+      // Skip tracking/consent
+      if (url.includes("batch.com") || url.includes("usercentrics") || url.includes("cookielaw")
+          || url.includes("analytics") || url.includes("doubleclick") || url.includes("facebook")) return;
+      try {
+        const json = await response.json();
+        const items = json.hits || json.results?.[0]?.hits || json.products || json.results
+          || json.articles || json.items || json.data?.products || json.data?.articles
+          || (Array.isArray(json) && json.length > 2 ? json : null)
+          || [];
+        if (items.length > 2) {
+          console.log(`[Aldi] Intercepted ${items.length} items from: ${url.slice(0, 120)}`);
+          console.log(`[Aldi] Sample keys: ${Object.keys(items[0] || {}).slice(0, 10).join(", ")}`);
+          apiData.push({ url, items });
+        } else if (typeof json === "object" && !Array.isArray(json) && Object.keys(json).length > 0) {
+          console.log(`[Aldi] JSON (geen array) van: ${url.slice(0, 120)} keys: ${Object.keys(json).slice(0, 8).join(", ")}`);
+        }
+      } catch { /* skip */ }
     });
 
     // Try correct Aldi Belgium URLs
@@ -74,13 +81,16 @@ async function scrapeAldi(browser, maxResults = 15) {
     if (apiData.length > 0) {
       const best = apiData.sort((a, b) => b.items.length - a.items.length)[0];
       const itemsWithPrice = best.items.filter(p =>
-        (p.regularPrice || p.originalPrice || p.price || p.salePrice || p.promoPrice) > 0
+        (p.regularPrice || p.originalPrice || p.price || p.salePrice || p.promoPrice
+         || p.priceWithTax || p.currentPrice || p.listPrice || p.price?.value
+         || p.price?.regular || p.price?.sale) > 0
       );
       if (itemsWithPrice.length > 0) {
         console.log("[Aldi] API intercept met prijzen:", best.url, "->", itemsWithPrice.length, "items");
         return itemsWithPrice.slice(0, maxResults).map((p, i) => {
-          const orig = p.regularPrice || p.originalPrice || p.price || 0;
-          const curr = p.salePrice || p.promoPrice || p.price || orig;
+          const orig = p.regularPrice || p.originalPrice || p.listPrice || p.priceWithTax
+            || p.currentPrice || p.price?.regular || p.price?.value || p.price || 0;
+          const curr = p.salePrice || p.promoPrice || p.price?.sale || p.price || orig;
           const savings = orig > curr ? Math.round((1 - curr / orig) * 100) : 0;
           return {
             id: 7000 + i,

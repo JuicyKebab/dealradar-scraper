@@ -45,13 +45,50 @@ function mapDelhaize(p, i) {
   };
 }
 
+// Recursief zoeken naar product-arrays in een willekeurig JSON-object
+function findProductArrays(obj, depth = 0, found = []) {
+  if (depth > 6 || !obj || typeof obj !== "object") return found;
+  if (Array.isArray(obj)) {
+    if (obj.length >= 3 && obj[0] && typeof obj[0] === "object"
+        && (obj[0].name || obj[0].title || obj[0].productName || obj[0].displayName
+            || obj[0].label || obj[0].ean || obj[0].id)) {
+      found.push(obj);
+    }
+    obj.forEach(item => findProductArrays(item, depth + 1, found));
+  } else {
+    for (const val of Object.values(obj)) {
+      findProductArrays(val, depth + 1, found);
+    }
+  }
+  return found;
+}
+
 async function fetchDelhaizeAPI() {
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json",
+    "Accept": "application/json, text/html,*/*",
     "Accept-Language": "nl-BE,nl;q=0.9",
     "Referer": "https://www.delhaize.be/nl/promoties",
   };
+
+  // Probeer __NEXT_DATA__ uit de HTML te halen (SSR)
+  try {
+    const htmlRes = await fetch("https://www.delhaize.be/nl/promoties", { headers: { ...headers, Accept: "text/html" } });
+    if (htmlRes.ok) {
+      const html = await htmlRes.text();
+      const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/);
+      if (match) {
+        const nextData = JSON.parse(match[1]);
+        const arrays = findProductArrays(nextData);
+        if (arrays.length > 0) {
+          const best = arrays.sort((a, b) => b.length - a.length)[0];
+          console.log("[Delhaize] __NEXT_DATA__ producten:", best.length, "sample keys:", Object.keys(best[0] || {}).slice(0, 8).join(", "));
+          return best;
+        }
+        console.log("[Delhaize] __NEXT_DATA__ aanwezig maar geen producten gevonden, top-keys:", Object.keys(nextData).slice(0, 10).join(", "));
+      }
+    }
+  } catch (e) { console.log("[Delhaize] __NEXT_DATA__ fetch fout:", e.message); }
 
   // Delhaize OCAPI product search — promoties filter
   const endpoints = [
@@ -63,7 +100,7 @@ async function fetchDelhaizeAPI() {
   for (const url of endpoints) {
     try {
       const res = await fetch(url, { headers });
-      if (!res.ok) continue;
+      if (!res.ok) { console.log("[Delhaize] API", url.slice(0, 60), "->", res.status); continue; }
       const ct = res.headers.get("content-type") || "";
       if (!ct.includes("application/json")) continue;
       const data = await res.json();
@@ -97,22 +134,31 @@ async function scrapeDelhaize(browser, maxResults = 50) {
       try {
         const json = await response.json();
         const candidates = [
-          json.results, json.products, json.items,
+          json.results, json.products, json.items, json.promotions,
           json.data?.products, json.data?.promotions,
           json.data?.promotionProducts,
           json.data?.promotionPage?.products,
           json.data?.searchProducts?.results,
           json.data?.promotedProducts,
           json.data?.productSearch?.productHits,
-          json.hits,
+          json.hits, json.searchResult?.hits,
           Array.isArray(json) ? json : null,
-        ].filter(a => Array.isArray(a) && a.length >= 1
-          && (a[0]?.name || a[0]?.title || a[0]?.productName)
-          && typeof (a[0]?.name || a[0]?.title || a[0]?.productName) === "string");
+        ].filter(a => Array.isArray(a) && a.length >= 1 && a[0] && typeof a[0] === "object"
+          && (a[0]?.name || a[0]?.title || a[0]?.productName || a[0]?.displayName
+              || a[0]?.label || a[0]?.ean || a[0]?.id || a[0]?.productId));
 
         if (candidates.length > 0) {
-          console.log("[Delhaize] API intercept:", url.slice(0, 80), "->", candidates[0].length);
+          console.log("[Delhaize] API intercept:", url.slice(0, 80), "->", candidates[0].length,
+            "sample keys:", Object.keys(candidates[0][0] || {}).slice(0, 8).join(", "));
           apiProducts.push(...candidates[0]);
+        } else if (typeof json === "object" && !Array.isArray(json)) {
+          // Dieper zoeken via recursie
+          const deepArrays = findProductArrays(json);
+          if (deepArrays.length > 0) {
+            const best = deepArrays.sort((a, b) => b.length - a.length)[0];
+            console.log("[Delhaize] Deep intercept:", url.slice(0, 80), "->", best.length);
+            apiProducts.push(...best);
+          }
         }
       } catch { /* skip */ }
     });
