@@ -84,9 +84,10 @@ const DELHAIZE_PROMO_QUERY = `
       products {
         name
         description
-        price { value regularPrice promotionPrice }
+        price { value }
         images { url }
         categories { name }
+        potentialPromotions { description promotionType endDate }
       }
       pagination {
         currentPage
@@ -145,19 +146,39 @@ async function fetchAllDelhaizePromos() {
   }
 }
 
+function parseDelhaizeEndDate(str) {
+  // "01/04/2026 21:59:00" → "wo 1 april"
+  if (!str) return dutchDate(7);
+  const [datePart] = str.split(" ");
+  const [d, m, y] = datePart.split("/");
+  if (!d || !m) return dutchDate(7);
+  const dt = new Date(y, Number(m) - 1, Number(d));
+  const days = ["zo","ma","di","wo","do","vr","za"];
+  const months = ["januari","februari","maart","april","mei","juni","juli","augustus","september","oktober","november","december"];
+  return `${days[dt.getDay()]} ${Number(d)} ${months[Number(m) - 1]}`;
+}
+
 function mapDelhaizeGQL(p, i) {
-  const orig = p.price?.regularPrice ?? p.price?.value ?? 0;
-  const curr = p.price?.promotionPrice ?? p.price?.value ?? orig;
-  const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
+  const price = p.price?.value ?? 0;
+  const promo = p.potentialPromotions?.[0];
+  const dealText = promo?.description || "Promo";
+
+  // Probeer percentage te parsen uit beschrijving (bv. "-20%", "20% korting")
+  const pctMatch = dealText.match(/(\d+)\s*%/);
+  const savings = pctMatch ? parseInt(pctMatch[1], 10) : 0;
+  const newPrice = savings > 0 ? Math.round(price * (1 - savings / 100) * 100) / 100 : price;
+
   return {
     id: 5000 + i,
     store: "Delhaize", storeColor: "#E4002B", storeLogo: "D",
     item: p.name || "Onbekend",
-    deal: savings > 0 ? `-${savings}%` : "Promo",
+    deal: dealText,
     category: p.categories?.[0]?.name || "Overig",
-    originalPrice: orig, newPrice: curr, savings,
+    originalPrice: price,
+    newPrice,
+    savings,
     emoji: categoryToEmoji(p.categories?.[0]?.name),
-    validUntil: dutchDate(7),
+    validUntil: parseDelhaizeEndDate(promo?.endDate),
     hot: savings >= 30,
     description: p.description || "",
     image: p.images?.[0]?.url ? `https://www.delhaize.be${p.images[0].url}` : null,
