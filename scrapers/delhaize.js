@@ -73,26 +73,74 @@ const DELHAIZE_HEADERS = {
   "Referer": "https://www.delhaize.be/nl/promoties",
 };
 
-// Delhaize GraphQL: productSearch geeft producten met naam + prijs
-// We filteren op prijs < regularPrice om promoartikelen te vinden
-async function fetchDelhaizeGQL(pageSize = 100) {
-  try {
+const DELHAIZE_PROMO_QUERY = `
+  query GetProductSearch($lang: String, $pageNumber: Int, $pageSize: Int) {
+    productSearch: productSearchV2(
+      lang: $lang
+      searchQuery: "promotions"
+      pageSize: $pageSize
+      pageNumber: $pageNumber
+    ) {
+      products {
+        name
+        description
+        price { value }
+        images { url }
+        categories { name }
+      }
+      pagination {
+        currentPage
+        totalPages
+        totalResults
+        pageSize
+      }
+    }
+  }
+`;
+
+// Haalt alle Delhaize promoties op via productSearchV2 (1540+ producten, gepagineerd)
+async function fetchAllDelhaizePromos() {
+  const PAGE_SIZE = 50; // server-max
+  const MAX_PAGES = 31; // ~1540 / 50
+
+  // Haal pagina 0 op om totalPages te weten
+  async function fetchPage(pageNumber) {
     const res = await fetch(DELHAIZE_GQL, {
       method: "POST",
       headers: DELHAIZE_HEADERS,
       body: JSON.stringify({
-        query: `{ productSearch(pageSize: ${pageSize}) { products { name description price { value } images { url } categories { name } } } }`,
+        operationName: "GetProductSearch",
+        query: DELHAIZE_PROMO_QUERY,
+        variables: { lang: "nl", pageNumber, pageSize: PAGE_SIZE },
       }),
     });
-    if (!res.ok) { console.log("[Delhaize] GQL status:", res.status); return null; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    const products = data?.data?.productSearch?.products || [];
-    if (products.length > 0) {
-      console.log("[Delhaize] GQL:", products.length, "producten, sample:", products[0]?.name);
+    return data?.data?.productSearch || null;
+  }
+
+  try {
+    const first = await fetchPage(0);
+    if (!first?.products?.length) return null;
+    const totalPages = Math.min(first.pagination?.totalPages ?? 1, MAX_PAGES);
+    console.log(`[Delhaize] GQL: ${first.pagination?.totalResults} promoties, ${totalPages} pagina's`);
+
+    const allProducts = [...first.products];
+
+    // Haal resterende pagina's parallel op (max 5 tegelijk)
+    for (let start = 1; start < totalPages; start += 5) {
+      const batch = [];
+      for (let p = start; p < Math.min(start + 5, totalPages); p++) {
+        batch.push(fetchPage(p).then(r => r?.products || []).catch(() => []));
+      }
+      const results = await Promise.all(batch);
+      results.forEach(prods => allProducts.push(...prods));
     }
-    return products.length > 0 ? products : null;
+
+    console.log(`[Delhaize] GQL totaal: ${allProducts.length} producten`);
+    return allProducts;
   } catch (e) {
-    console.log("[Delhaize] GQL fout:", e.message);
+    console.log("[Delhaize] GQL paginering fout:", e.message);
     return null;
   }
 }
@@ -103,7 +151,7 @@ function mapDelhaizeGQL(p, i) {
     id: 5000 + i,
     store: "Delhaize", storeColor: "#E4002B", storeLogo: "D",
     item: p.name || "Onbekend",
-    deal: "Aanbieding",
+    deal: "Promo",
     category: p.categories?.[0]?.name || "Overig",
     originalPrice: price, newPrice: price, savings: 0,
     emoji: categoryToEmoji(p.categories?.[0]?.name),
@@ -144,8 +192,14 @@ async function fetchDelhaizeAPI() {
   return null;
 }
 
-async function scrapeDelhaize(browser, maxResults = 50) {
-  // Probeer eerst directe API / __NEXT_DATA__
+async function scrapeDelhaize(browser, maxResults = 1500) {
+  // Probeer eerst productSearchV2 met volledige paginering (1540+ producten)
+  const allPromos = await fetchAllDelhaizePromos();
+  if (allPromos && allPromos.length > 0) {
+    return allPromos.slice(0, maxResults).map((p, i) => mapDelhaizeGQL(p, i));
+  }
+
+  // Fallback: __NEXT_DATA__ uit HTML
   const apiResult = await fetchDelhaizeAPI();
   if (apiResult && apiResult.length > 2) {
     return apiResult.slice(0, maxResults).map(mapDelhaize);
@@ -247,11 +301,11 @@ async function scrapeDelhaize(browser, maxResults = 50) {
       return unique.slice(0, maxResults).map(mapDelhaize);
     }
 
-    // Laatste fallback: GraphQL productSearch (50 producten, niet promo-gefilterd maar met echte prijzen)
+    // Laatste fallback: probeer productSearchV2 alsnog
     console.log("[Delhaize] Playwright leeg — probeer GQL fallback");
-    const gqlProducts = await fetchDelhaizeGQL(50);
+    const gqlProducts = await fetchAllDelhaizePromos();
     if (gqlProducts && gqlProducts.length > 0) {
-      return gqlProducts.slice(0, maxResults).map(mapDelhaizeGQL);
+      return gqlProducts.slice(0, maxResults).map((p, i) => mapDelhaizeGQL(p, i));
     }
 
     console.log("[Delhaize] Geen producten gevonden");
