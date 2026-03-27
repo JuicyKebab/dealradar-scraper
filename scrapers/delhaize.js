@@ -84,7 +84,7 @@ const DELHAIZE_PROMO_QUERY = `
       products {
         name
         description
-        price { value }
+        price { value regularPrice promotionPrice }
         images { url }
         categories { name }
       }
@@ -146,17 +146,19 @@ async function fetchAllDelhaizePromos() {
 }
 
 function mapDelhaizeGQL(p, i) {
-  const price = p.price?.value ?? 0;
+  const orig = p.price?.regularPrice ?? p.price?.value ?? 0;
+  const curr = p.price?.promotionPrice ?? p.price?.value ?? orig;
+  const savings = orig > curr && orig > 0 ? Math.round((1 - curr / orig) * 100) : 0;
   return {
     id: 5000 + i,
     store: "Delhaize", storeColor: "#E4002B", storeLogo: "D",
     item: p.name || "Onbekend",
-    deal: "Promo",
+    deal: savings > 0 ? `-${savings}%` : "Promo",
     category: p.categories?.[0]?.name || "Overig",
-    originalPrice: price, newPrice: price, savings: 0,
+    originalPrice: orig, newPrice: curr, savings,
     emoji: categoryToEmoji(p.categories?.[0]?.name),
     validUntil: dutchDate(7),
-    hot: false,
+    hot: savings >= 30,
     description: p.description || "",
     image: p.images?.[0]?.url ? `https://www.delhaize.be${p.images[0].url}` : null,
   };
