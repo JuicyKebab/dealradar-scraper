@@ -52,10 +52,10 @@ async function fetchSparDirect() {
   };
 
   const candidates = [
+    "https://www.mijnspar.be/content/spar/nl/promoties/jcr:content/root/responsivegrid/responsivegrid/responsivegrid/filter_list_store_sp.model.json",
     "https://www.mijnspar.be/nl/promoties/filter_list_store_sp.model.json",
     "https://www.mijnspar.be/nl/promoties.filter_list_store_sp.model.json",
     "https://www.mijnspar.be/content/spar/be/nl/promoties/jcr:content/root/responsivegrid/filter_list_store_sp.model.json",
-    "https://www.mijnspar.be/content/spar/be/nl/promoties/_jcr_content/root/responsivegrid/filter_list_store_sp.model.json",
   ];
 
   for (const url of candidates) {
