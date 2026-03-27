@@ -83,35 +83,67 @@ function mapSparItem(item, i) {
   };
 }
 
-// Probeer de API direct op te halen met de bekende URL-patronen
-async function fetchSparDirect() {
-  const HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "nl-BE,nl;q=0.9",
-    "Referer": "https://www.mijnspar.be/nl/promoties",
-  };
+const SPAR_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "nl-BE,nl;q=0.9",
+  "Referer": "https://www.mijnspar.be/nl/promoties",
+};
 
-  const candidates = [
+async function fetchSparEndpoint(url) {
+  try {
+    const res = await fetch(url, { headers: SPAR_HEADERS });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.results || [];
+  } catch { return []; }
+}
+
+// Haal alle promo sub-pagina's op via sitemap en zoek filter_list endpoints
+async function discoverSparEndpoints() {
+  const known = [
     "https://www.mijnspar.be/content/spar/nl/promoties/jcr:content/root/responsivegrid/responsivegrid/responsivegrid/filter_list_store_sp.model.json",
-    "https://www.mijnspar.be/nl/promoties/filter_list_store_sp.model.json",
-    "https://www.mijnspar.be/nl/promoties.filter_list_store_sp.model.json",
-    "https://www.mijnspar.be/content/spar/be/nl/promoties/jcr:content/root/responsivegrid/filter_list_store_sp.model.json",
   ];
+  try {
+    const sitemapRes = await fetch("https://www.mijnspar.be/sitemap.xml", { headers: SPAR_HEADERS });
+    if (!sitemapRes.ok) return known;
+    const xml = await sitemapRes.text();
+    const promoUrls = [...xml.matchAll(/<loc>([^<]*\/promoties[^<]*)<\/loc>/g)].map(m => m[1]);
+    console.log(`[Spar] Sitemap: ${promoUrls.length} promo-pagina's gevonden`);
 
-  for (const url of candidates) {
-    try {
-      const res = await fetch(url, { headers: HEADERS });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const results = data.results || data.promotions || (Array.isArray(data) ? data : null);
-      if (results?.length > 0) {
-        console.log(`[Spar] Direct API: ${results.length} deals via ${url}`);
-        return results;
-      }
-    } catch { /* probeer volgende */ }
+    // Haal HTML van elke promo sub-pagina en zoek filter_list endpoints
+    const endpoints = new Set(known);
+    await Promise.all(promoUrls.map(async (pageUrl) => {
+      try {
+        const res = await fetch(pageUrl, { headers: { ...SPAR_HEADERS, Accept: "text/html" } });
+        if (!res.ok) return;
+        const html = await res.text();
+        const matches = html.matchAll(/\/content\/spar[^\s"'<>]*filter_list[^\s"'<>]*\.json/g);
+        for (const m of matches) endpoints.add("https://www.mijnspar.be" + m[0]);
+      } catch { /* skip */ }
+    }));
+    return [...endpoints];
+  } catch (e) {
+    console.log("[Spar] Sitemap scan fout:", e.message);
+    return known;
   }
-  return null;
+}
+
+async function fetchSparDirect() {
+  const endpoints = await discoverSparEndpoints();
+  console.log(`[Spar] ${endpoints.length} endpoints gevonden`);
+
+  const allResults = [];
+  const seenUuids = new Set();
+  await Promise.all(endpoints.map(async (url) => {
+    const results = await fetchSparEndpoint(url);
+    if (results.length > 0) console.log(`[Spar] ${results.length} deals via ...${url.slice(-60)}`);
+    for (const r of results) {
+      const key = r.uuid || r.promotion?.uuid || JSON.stringify(r.promotion?.promoTitle);
+      if (!seenUuids.has(key)) { seenUuids.add(key); allResults.push(r); }
+    }
+  }));
+  return allResults.length > 0 ? allResults : null;
 }
 
 async function scrapeSpar(browser, maxResults = 500) {
