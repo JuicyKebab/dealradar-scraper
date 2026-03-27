@@ -17,25 +17,66 @@ function sparDateToDutch(formatted) {
   return `${_DDAYS[d.getDay()]} ${day} ${_DMONTHS[Number(month) - 1]}`;
 }
 
+function sparTimestampToDutch(ts) {
+  if (!ts) return dutchDate(7);
+  const d = new Date(ts);
+  return `${_DDAYS[d.getDay()]} ${d.getDate()} ${_DMONTHS[d.getMonth()]}`;
+}
+
+function sparPrice(obj) {
+  if (!obj || obj.empty) return null;
+  const bd = obj.beforeDecimal;
+  const ad = obj.afterDecimal;
+  if (bd === null && ad === null) return null;
+  return parseFloat(`${bd || 0}.${String(ad || "0").padStart(2, "0")}`);
+}
+
+function sparCategory(tags) {
+  const catTag = (tags || []).find(t => t.tagID?.includes("/category/"));
+  if (catTag) {
+    const name = catTag.title || catTag.name || "";
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }
+  return "Overig";
+}
+
+function sparDealLabel(tags, savings) {
+  const labelTag = (tags || []).find(t => t.tagID?.includes("/labels/"));
+  if (labelTag?.title) return labelTag.title;
+  return savings > 0 ? `-${savings}%` : "Aanbieding";
+}
+
+function sparEmoji(category) {
+  const map = { zuivel: "🥛", kaas: "🧀", vlees: "🥩", groenten: "🥦", fruit: "🍎", dranken: "🥤", brood: "🍞", diepvries: "🧊", snacks: "🍿" };
+  const lower = (category || "").toLowerCase();
+  for (const [k, e] of Object.entries(map)) { if (lower.includes(k)) return e; }
+  return "🛒";
+}
+
 function mapSparItem(item, i) {
   const p = item.promotion;
   if (!p?.promoTitle) return null;
-  const normalPrice = parseFloat(`${p.normalPrice?.beforeDecimal || 0}.${String(p.normalPrice?.afterDecimal || "00").padStart(2, "0")}`);
-  const promoPrice = parseFloat(`${p.promoPrice?.beforeDecimal || 0}.${String(p.promoPrice?.afterDecimal || "00").padStart(2, "0")}`);
-  const savings = normalPrice > promoPrice && promoPrice > 0
+
+  const normalPrice = sparPrice(p.normalPrice);
+  const promoPrice = sparPrice(p.promoPrice);
+  const savings = normalPrice && promoPrice && normalPrice > promoPrice
     ? Math.round((1 - promoPrice / normalPrice) * 100) : 0;
+
+  const category = sparCategory(item.localizedTags);
+  const dealLabel = sparDealLabel(item.localizedTags, savings);
   const description = [p.promoDescription, p.quantity].filter(Boolean).join(" ");
+
   return {
     id: 8000 + i,
     store: "Spar", storeColor: "#007A33", storeLogo: "S",
     item: p.promoTitle,
-    deal: savings > 0 ? `-${savings}%` : "Aanbieding",
-    category: "Overig",
-    originalPrice: normalPrice,
-    newPrice: promoPrice || normalPrice,
+    deal: dealLabel,
+    category,
+    originalPrice: normalPrice ?? promoPrice ?? 0,
+    newPrice: promoPrice ?? normalPrice ?? 0,
     savings,
-    emoji: "🛒",
-    validUntil: sparDateToDutch(p.formattedEndDate),
+    emoji: sparEmoji(category),
+    validUntil: sparTimestampToDutch(p.endDate),
     hot: savings >= 30,
     description,
     image: p.promoAssetPath ? `https://www.mijnspar.be${p.promoAssetPath}` : null,
