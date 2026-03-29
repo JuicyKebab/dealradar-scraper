@@ -69,42 +69,42 @@ function launchBrowser() {
 }
 
 
+// Elke Playwright-scraper draait in een geïsoleerde browser om crashes te voorkomen
+async function runWithBrowser(name, scraperFn) {
+  const browser = await launchBrowser();
+  try {
+    const deals = await scraperFn(browser);
+    console.log(`[DealRadar] ${name}: ${deals.length} deals`);
+    return deals;
+  } catch (err) {
+    console.error(`[DealRadar] ${name} FAILED:`, err.message);
+    return [];
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 async function scrapeAll() {
   console.log("[DealRadar] Starting scrape...");
-  const browser = await launchBrowser();
   const deals = [];
 
-  // API-scrapers (geen browser nodig) parallel draaien
-  const apiScrapers = [
-    { name: "Colruyt",      fn: () => scrapeColruyt(browser) },
-    { name: "Albert Heijn", fn: () => scrapeAlbertHeijn(browser) },
-    { name: "Spar",         fn: () => scrapeSpar(browser) },
-    { name: "Aldi",         fn: () => scrapeAldi(browser) },
-  ];
-  const apiResults = await Promise.allSettled(apiScrapers.map(({ name, fn }) =>
-    fn().then(r => { console.log(`[DealRadar] ${name}: ${r.length} deals`); return r; })
-       .catch(err => { console.error(`[DealRadar] ${name} FAILED:`, err.message); return []; })
-  ));
-  deals.push(...apiResults.flatMap(r => r.status === "fulfilled" ? r.value : []));
+  // HTTP-scrapers parallel — geen browser nodig
+  const httpResults = await Promise.allSettled([
+    scrapeSpar(null).then(r => { console.log(`[DealRadar] Spar: ${r.length} deals`); return r; }).catch(e => { console.error("[DealRadar] Spar FAILED:", e.message); return []; }),
+    scrapeAldi(null).then(r => { console.log(`[DealRadar] Aldi: ${r.length} deals`); return r; }).catch(e => { console.error("[DealRadar] Aldi FAILED:", e.message); return []; }),
+    scrapeLidl(null).then(r => { console.log(`[DealRadar] Lidl: ${r.length} deals`); return r; }).catch(e => { console.error("[DealRadar] Lidl FAILED:", e.message); return []; }),
+    scrapeDelhaize(null).then(r => { console.log(`[DealRadar] Delhaize: ${r.length} deals`); return r; }).catch(e => { console.error("[DealRadar] Delhaize FAILED:", e.message); return []; }),
+  ]);
+  deals.push(...httpResults.flatMap(r => r.status === "fulfilled" ? r.value : []));
 
-  // Playwright-scrapers sequentieel — voorkomt memory-problemen
-  const playwrightScrapers = [
-    { name: "Lidl",      fn: () => scrapeLidl(browser) },
-    { name: "Delhaize",  fn: () => scrapeDelhaize(browser) },
-    { name: "Carrefour", fn: () => scrapeCarrefour(browser) },
-    { name: "OKay",      fn: () => scrapeOkay(browser) },
-  ];
-  for (const { name, fn } of playwrightScrapers) {
-    try {
-      const r = await fn();
-      console.log(`[DealRadar] ${name}: ${r.length} deals`);
-      deals.push(...r);
-    } catch (err) {
-      console.error(`[DealRadar] ${name} FAILED:`, err.message);
-    }
+  // Playwright-scrapers sequentieel, elk met eigen browser — crashes cascaderen niet
+  for (const { name, fn } of [
+    { name: "OKay",         fn: b => scrapeOkay(b) },
+    { name: "Albert Heijn", fn: b => scrapeAlbertHeijn(b) },
+  ]) {
+    deals.push(...await runWithBrowser(name, fn));
   }
 
-  await browser.close();
   console.log(`[DealRadar] Totaal: ${deals.length} deals`);
   await saveToSupabase(deals);
   return deals;
@@ -152,26 +152,14 @@ app.get("/health", (req, res) => res.json({
 
 app.get("/debug", async (req, res) => {
   const results = {};
-  let browser;
-  try {
-    browser = await launchBrowser();
-    results.browser = { ok: true };
-  } catch (e) {
-    return res.json({ browser: { ok: false, error: e.message } });
-  }
 
-  const scrapers = [
-    { name: "colruyt",      fn: () => scrapeColruyt(browser) },
-    { name: "albertHeijn",  fn: () => scrapeAlbertHeijn(browser) },
-    { name: "lidl",         fn: () => scrapeLidl(browser) },
-    { name: "delhaize",     fn: () => scrapeDelhaize(browser) },
-    { name: "carrefour",    fn: () => scrapeCarrefour(browser) },
-    { name: "aldi",         fn: () => scrapeAldi(browser) },
-    { name: "spar",         fn: () => scrapeSpar(browser) },
-    { name: "okay",         fn: () => scrapeOkay(browser) },
-  ];
-
-  for (const { name, fn } of scrapers) {
+  // HTTP-scrapers (geen browser)
+  for (const [name, fn] of [
+    ["lidl",     () => scrapeLidl(null)],
+    ["delhaize", () => scrapeDelhaize(null)],
+    ["aldi",     () => scrapeAldi(null)],
+    ["spar",     () => scrapeSpar(null)],
+  ]) {
     try {
       const deals = await fn();
       results[name] = { ok: true, count: deals.length, sample: deals[0]?.item || null };
@@ -180,7 +168,15 @@ app.get("/debug", async (req, res) => {
     }
   }
 
-  await browser.close();
+  // Playwright-scrapers elk met eigen browser
+  for (const [name, fn] of [
+    ["okay",        b => scrapeOkay(b)],
+    ["albertHeijn", b => scrapeAlbertHeijn(b)],
+  ]) {
+    const deals = await runWithBrowser(name, fn);
+    results[name] = { ok: true, count: deals.length, sample: deals[0]?.item || null };
+  }
+
   res.json(results);
 });
 
