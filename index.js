@@ -98,9 +98,9 @@ async function scrapeAll() {
   deals.push(...httpResults.flatMap(r => r.status === "fulfilled" ? r.value : []));
 
   // Playwright-scrapers sequentieel, elk met eigen browser — crashes cascaderen niet
+  // AH verwijderd: laadt producten alleen na inloggen (3239 skeletons, €0.00 placeholder)
   for (const { name, fn } of [
-    { name: "OKay",         fn: b => scrapeOkay(b) },
-    { name: "Albert Heijn", fn: b => scrapeAlbertHeijn(b) },
+    { name: "OKay", fn: b => scrapeOkay(b) },
   ]) {
     deals.push(...await runWithBrowser(name, fn));
   }
@@ -170,8 +170,7 @@ app.get("/debug", async (req, res) => {
 
   // Playwright-scrapers elk met eigen browser
   for (const [name, fn] of [
-    ["okay",        b => scrapeOkay(b)],
-    ["albertHeijn", b => scrapeAlbertHeijn(b)],
+    ["okay", b => scrapeOkay(b)],
   ]) {
     const deals = await runWithBrowser(name, fn);
     results[name] = { ok: true, count: deals.length, sample: deals[0]?.item || null };
