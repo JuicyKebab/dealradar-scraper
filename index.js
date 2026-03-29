@@ -79,6 +79,7 @@ async function scrapeAll() {
     { name: "Colruyt",      fn: () => scrapeColruyt(browser) },
     { name: "Albert Heijn", fn: () => scrapeAlbertHeijn(browser) },
     { name: "Spar",         fn: () => scrapeSpar(browser) },
+    { name: "Aldi",         fn: () => scrapeAldi(browser) },
   ];
   const apiResults = await Promise.allSettled(apiScrapers.map(({ name, fn }) =>
     fn().then(r => { console.log(`[DealRadar] ${name}: ${r.length} deals`); return r; })
@@ -89,7 +90,6 @@ async function scrapeAll() {
   // Playwright-scrapers sequentieel — voorkomt memory-problemen
   const playwrightScrapers = [
     { name: "Lidl",      fn: () => scrapeLidl(browser) },
-    { name: "Aldi",      fn: () => scrapeAldi(browser) },
     { name: "Delhaize",  fn: () => scrapeDelhaize(browser) },
     { name: "Carrefour", fn: () => scrapeCarrefour(browser) },
     { name: "OKay",      fn: () => scrapeOkay(browser) },

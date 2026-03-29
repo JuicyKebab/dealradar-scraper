@@ -29,7 +29,7 @@ function categoryToEmoji(cat) {
   return "🛒";
 }
 
-async function scrapeCarrefour(browser, maxResults = 15) {
+async function scrapeCarrefour(browser, maxResults = 200) {
   const page = await browser.newPage();
   try {
     await page.setExtraHTTPHeaders({
@@ -72,12 +72,17 @@ async function scrapeCarrefour(browser, maxResults = 15) {
     await page.waitForTimeout(4000);
 
     // Accept cookie consent if present
-    try {
-      await page.waitForSelector("button:has-text('Alles accepteren'), button:has-text('Accepteer'), #onetrust-accept-btn-handler", { timeout: 5000 });
-      await page.click("button:has-text('Alles accepteren'), button:has-text('Accepteer'), #onetrust-accept-btn-handler");
-      console.log("[Carrefour] Cookie banner accepted");
-      await page.waitForTimeout(2000);
-    } catch { /* no banner */ }
+    for (const sel of ["#onetrust-accept-btn-handler", "button:has-text('Alles accepteren')", "button:has-text('Accepteer')", "button:has-text('Accept')"]) {
+      try { await page.waitForSelector(sel, { timeout: 3000 }); await page.click(sel); console.log("[Carrefour] Cookie accepted"); break; } catch { /* try next */ }
+    }
+    await page.waitForTimeout(2000);
+
+    // Scroll om lazy-loading te triggeren
+    for (let i = 1; i <= 6; i++) {
+      await page.evaluate((p) => window.scrollTo(0, document.body.scrollHeight * p), i / 6);
+      await page.waitForTimeout(1000);
+    }
+    await page.waitForTimeout(3000);
 
     // Check API responses
     for (const { json } of apiData) {
@@ -153,22 +158,24 @@ async function scrapeCarrefour(browser, maxResults = 15) {
     const products = await page.evaluate(() => {
       const results = [];
       const selectors = [
+        "[data-pid]",                     // SFCC (Salesforce Commerce Cloud)
         "[data-testid='product-card']",
         "[class*='ProductCard']",
         "[class*='product-card']",
         "[class*='ProductTile']",
         "[class*='PromotionCard']",
+        ".product-tile",
         ".product-item",
       ];
 
       let cards = [];
       for (const sel of selectors) {
         cards = Array.from(document.querySelectorAll(sel));
-        if (cards.length > 0) break;
+        if (cards.length > 3) { console.log("Carrefour selector:", sel, cards.length); break; }
       }
 
-      for (const card of cards.slice(0, 25)) {
-        const name = card.querySelector("[class*='name'], [class*='title'], [class*='description'], h2, h3")?.textContent?.trim();
+      for (const card of cards) {
+        const name = card.querySelector(".pdp-link a, .product-name, [class*='name'], [class*='title'], h2, h3")?.textContent?.trim();
         if (!name || name.length < 3) continue;
 
         let newPrice = 0, originalPrice = 0;
