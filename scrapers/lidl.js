@@ -55,7 +55,7 @@ function mapItem(item, i) {
     validUntil,
     hot: savings >= 30,
     description: d.keyfacts?.features?.[0] || "",
-    image: d.cutoutimageV2 || d.image || d.imageList?.[0] || null,
+    image: (Array.isArray(d.cutoutimageV2) ? d.cutoutimageV2[0] : d.cutoutimageV2) || d.image || d.imageList?.[0] || null,
   };
 }
 
