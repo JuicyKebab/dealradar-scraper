@@ -7,6 +7,7 @@ const { scrapeCarrefour } = require("./scrapers/carrefour");
 const { scrapeAldi } = require("./scrapers/aldi");
 const { scrapeSpar } = require("./scrapers/spar");
 const { scrapeAlbertHeijn } = require("./scrapers/albert-heijn");
+const { scrapeOkay } = require("./scrapers/okay");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -91,6 +92,7 @@ async function scrapeAll() {
     { name: "Aldi",      fn: () => scrapeAldi(browser) },
     { name: "Delhaize",  fn: () => scrapeDelhaize(browser) },
     { name: "Carrefour", fn: () => scrapeCarrefour(browser) },
+    { name: "OKay",      fn: () => scrapeOkay(browser) },
   ];
   for (const { name, fn } of playwrightScrapers) {
     try {
@@ -166,6 +168,7 @@ app.get("/debug", async (req, res) => {
     { name: "carrefour",    fn: () => scrapeCarrefour(browser) },
     { name: "aldi",         fn: () => scrapeAldi(browser) },
     { name: "spar",         fn: () => scrapeSpar(browser) },
+    { name: "okay",         fn: () => scrapeOkay(browser) },
   ];
 
   for (const { name, fn } of scrapers) {
