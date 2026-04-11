@@ -435,8 +435,8 @@ app.get("/scrape-renmans", async (req, res) => {
     const deals = await scrapeAllRenmans(runWithBrowser);
     res.json({ ok: true, count: deals.length, scraped_at: new Date().toISOString() });
   } catch (err) {
-    console.error("[scrape-renmans] failed:", err.message);
-    res.status(500).json({ ok: false, error: err.message });
+    console.error("[scrape-renmans] failed:", err.message, err.cause);
+    res.status(500).json({ ok: false, error: err.message, cause: err.cause?.message || err.cause?.code || String(err.cause || "") });
   }
 });
 
