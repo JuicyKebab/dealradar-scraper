@@ -68,7 +68,7 @@ async function getStoreList() {
   const match = html.match(/<script[^>]+data-drupal-selector="drupal-settings-json"[^>]*>([^<]+)<\/script>/);
   if (!match) throw new Error("Drupal settings niet gevonden");
   const settings = JSON.parse(match[1]);
-  const stores = settings.stores;
+  const stores = settings.stores?.stores;
   if (!Array.isArray(stores) || stores.length === 0) throw new Error("Geen winkels in Drupal settings");
   return stores.map(s => {
     const idMatch = s.link?.match(/\/define-shop\/(\d+)\//);
