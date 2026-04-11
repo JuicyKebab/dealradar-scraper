@@ -8,6 +8,7 @@ const { scrapeAldi } = require("./scrapers/aldi");
 const { scrapeSpar } = require("./scrapers/spar");
 const { scrapeAlbertHeijn } = require("./scrapers/albert-heijn");
 const { scrapeOkay } = require("./scrapers/okay");
+const { scrapeAllRenmans } = require("./scrapers/renmans");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -420,6 +421,22 @@ app.get("/lidl-test", async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Renmans scrape — apart getriggerd (wekelijks maandag 03:00 UTC via Vercel cron)
+app.get("/scrape-renmans", async (req, res) => {
+  const auth = req.headers.authorization;
+  const secret = process.env.CRON_SECRET;
+  if (!secret || auth !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    const deals = await scrapeAllRenmans(runWithBrowser);
+    res.json({ ok: true, count: deals.length, scraped_at: new Date().toISOString() });
+  } catch (err) {
+    console.error("[scrape-renmans] failed:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
