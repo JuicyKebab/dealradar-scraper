@@ -58,16 +58,14 @@ async function scrapeAll(base, onlyPromo = true) {
   const byId = new Map();
   for (let page = 1; page <= MAX_PAGES; page++) {
     const hits = await fetchPage(base, page);
-    let promoOnPage = 0;
     for (const h of hits) {
       const o = h.best_offer || {};
       const id = h.upid || o.id;
       if (!id) continue;
       if (onlyPromo && !(o.discount > 0)) continue;
-      promoOnPage++;
       if (!byId.has(id)) byId.set(id, h);
     }
-    if (promoOnPage < PAGE_SIZE) break;
+    if (hits.length < PAGE_SIZE) break; // einde van de catalogus (laatste pagina niet vol), niet van de promo's
   }
   return byId;
 }
