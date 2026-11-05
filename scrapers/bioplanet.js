@@ -79,12 +79,14 @@ async function fetchJSON(url) {
 async function fetchAllPromoProducts() {
   const size = 50;
   const products = [];
-  for (let page = 1; page <= 40; page++) {
+  let found = Infinity; // gateway kan de page-size lager cappen dan gevraagd → NIET breken op korte pagina
+  for (let page = 1; page <= 60 && products.length < found; page++) {
     const url = `${BFF_PRODUCTS}?placeId=${PLACE_ID}&page=${page}&size=${size}&sort=popularity+asc&isAvailable=true&inPromo=true`;
     const d = await fetchJSON(url);
+    if (page === 1) found = d.productsFound ?? 0;
     const batch = d.products || [];
+    if (batch.length === 0) break; // echt einde
     products.push(...batch);
-    if (products.length >= (d.productsFound ?? 0) || batch.length < size) break;
   }
   return products;
 }
