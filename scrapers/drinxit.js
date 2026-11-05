@@ -1,5 +1,5 @@
 // Drinxit scraper — Playwright (client-side rendered nopCommerce)
-// Promo's zijn identiek op alle subdomains; één fetch volstaat.
+// Promo's verschillen per subdomain → alle scrapen en dedupen op productId.
 import { chromium } from "playwright";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -60,6 +60,55 @@ function parseRibbon(ribbon) {
   return { deal: r, savings: 0, isBundleDeal: false };
 }
 
+async function extractItems(page) {
+  return page.evaluate(() => {
+    const items = [...document.querySelectorAll(".item-box")];
+    return items.map(item => {
+      // Ribbon = de promo-badge (bv. "5 + 1 gratis"), NIET de producttitel.
+      const ribbonEl = item.querySelector(".jama-overlay-ribbon, .ribbon-label, [class*='ribbon']");
+      const ribbonText = (ribbonEl?.textContent || "").trim();
+
+      const name = (
+        item.querySelector(".product-title a")?.textContent ||
+        item.querySelector(".product-title")?.textContent ||
+        item.querySelector("h2 a")?.textContent ||
+        item.querySelector("h2")?.textContent ||
+        ""
+      ).trim();
+
+      const productId = item.querySelector("[data-productid]")?.getAttribute("data-productid") ||
+        (item.querySelector(".product-title a, h2 a, .picture a")?.getAttribute("href") || "").split("/").filter(Boolean).pop();
+
+      const parsePrice = (str) => {
+        if (!str) return 0;
+        return parseFloat(str.replace(/[^\d.,]/g, "").replace(",", ".")) || 0;
+      };
+
+      const newPrice = parsePrice(
+        item.querySelector(".actual-price")?.textContent ||
+        item.querySelector(".jama-actual-price")?.textContent ||
+        item.querySelector(".product-price")?.textContent ||
+        ""
+      );
+
+      const originalPrice = parsePrice(
+        item.querySelector(".old-price")?.textContent ||
+        item.querySelector(".non-discounted-price")?.textContent ||
+        ""
+      );
+
+      const img = (
+        item.querySelector("[data-lazyloadsrc]")?.getAttribute("data-lazyloadsrc") ||
+        item.querySelector("img[data-src]")?.getAttribute("data-src") ||
+        item.querySelector("img")?.getAttribute("src") ||
+        ""
+      ).trim();
+
+      return { ribbonText, name, productId, newPrice, originalPrice, img };
+    });
+  });
+}
+
 async function fetchPromos() {
   let browser;
   try {
@@ -70,95 +119,33 @@ async function fetchPromos() {
     });
     const page = await ctx.newPage();
 
-    let loaded = false;
+    const allItems = [];
+    let anyLoaded = false;
+    let explicitEmpty = false;
+
+    // Promo's verschillen per subdomain → alle bezoeken en samenvoegen.
     for (const url of PROMO_URLS) {
       try {
         await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
-        // Wacht tot product-namen gerenderd zijn (client-side)
-        await page.waitForSelector(".product-title", { timeout: 10_000 }).catch(() => {});
-        loaded = true;
-        break;
+        await page.waitForSelector(".item-box, .no-result", { timeout: 10_000 }).catch(() => {});
+        anyLoaded = true;
+        const items = await extractItems(page);
+        if (items.length > 0) {
+          allItems.push(...items);
+        } else if (/geen promoties/i.test(await page.evaluate(() => document.body.textContent || ""))) {
+          explicitEmpty = true;
+        }
+        console.log(`[Drinxit] ${url}: ${items.length} items`);
       } catch (e) {
         console.warn(`[Drinxit] ${url} mislukt: ${e.message}`);
       }
     }
-    if (!loaded) throw new Error("Alle Drinxit promo-URLs gefaald");
-
-    // Diagnostiek: dump DOM structuur als er weinig items zijn
-    const diag = await page.evaluate(() => {
-      const items = [...document.querySelectorAll(".item-box")];
-      const sample = items.slice(0, 2).map(el => el.outerHTML.slice(0, 1000));
-      // Expliciete lege staat: site toont "Er zijn momenteel geen promoties"
-      const noResultEl = document.querySelector(".no-result, .page-body .no-result");
-      const emptyState = items.length === 0 && (
-        (noResultEl?.textContent || "").toLowerCase().includes("geen promoties") ||
-        /geen promoties/i.test(document.querySelector(".page-body")?.textContent || "")
-      );
-      return {
-        title: document.title,
-        url: location.href,
-        itemBoxCount: items.length,
-        productTitleCount: document.querySelectorAll(".product-title").length,
-        productNameCount: document.querySelectorAll(".product-name").length,
-        ribbonCount: document.querySelectorAll("[class*='ribbon']").length,
-        emptyState,
-        sampleHtml: sample,
-      };
-    });
-    console.log(`[Drinxit] diag:`, JSON.stringify(diag).slice(0, 2000));
-
-    const deals = await page.evaluate(() => {
-      const items = [...document.querySelectorAll(".item-box")];
-      return items.map(item => {
-        const ribbonEl = item.querySelector(".product-title, .jama-overlay-ribbon, .ribbon-label, [class*='ribbon']");
-        const ribbonText = (ribbonEl?.textContent || "").trim();
-
-        const name = (
-          item.querySelector(".product-name a")?.textContent ||
-          item.querySelector(".product-name")?.textContent ||
-          item.querySelector("h2 a")?.textContent ||
-          item.querySelector("h2")?.textContent ||
-          ""
-        ).trim();
-
-        const productId = item.getAttribute("data-productid") ||
-          item.querySelector("[data-productid]")?.getAttribute("data-productid") ||
-          (item.querySelector("h2 a, .product-name a, .picture a")?.getAttribute("href") || "").split("/").filter(Boolean).pop();
-
-        const parsePrice = (str) => {
-          if (!str) return 0;
-          return parseFloat(str.replace(/[^\d.,]/g, "").replace(",", ".")) || 0;
-        };
-
-        const newPrice = parsePrice(
-          item.querySelector(".actual-price")?.textContent ||
-          item.querySelector(".jama-actual-price")?.textContent ||
-          item.querySelector(".product-price")?.textContent ||
-          ""
-        );
-
-        const originalPrice = parsePrice(
-          item.querySelector(".old-price")?.textContent ||
-          item.querySelector(".non-discounted-price")?.textContent ||
-          ""
-        );
-
-        const img = (
-          item.querySelector("[data-lazyloadsrc]")?.getAttribute("data-lazyloadsrc") ||
-          item.querySelector("img[data-src]")?.getAttribute("data-src") ||
-          item.querySelector("img")?.getAttribute("src") ||
-          ""
-        ).trim();
-
-        return { ribbonText, name, productId, newPrice, originalPrice, img };
-      });
-    });
-
-    console.log(`[Drinxit] ${deals.length} items van pagina, ${deals.filter(d => d.ribbonText).length} met ribbon`);
+    if (!anyLoaded) throw new Error("Alle Drinxit promo-URLs gefaald");
 
     await page.close();
     await ctx.close();
-    return { items: deals, diag };
+    // emptyState alleen als nergens items én minstens één subdomain expliciet "geen promoties" meldt.
+    return { items: allItems, emptyState: allItems.length === 0 && explicitEmpty };
   } finally {
     await browser?.close();
   }
@@ -166,8 +153,11 @@ async function fetchPromos() {
 
 function buildDeals(rawItems) {
   const deals = [];
+  const seen = new Set();
   for (const item of rawItems) {
     if (!item.ribbonText || !item.name || !item.productId) continue;
+    if (seen.has(item.productId)) continue;
+    seen.add(item.productId);
 
     const { deal, savings, bundleBuy, bundleFree, isBundleDeal } = parseRibbon(item.ribbonText);
 
@@ -216,16 +206,16 @@ async function supabaseWrite(deals) {
 }
 
 export async function scrapeAllDrinxit() {
-  const { items: rawItems, diag } = await fetchPromos();
+  const { items: rawItems, emptyState } = await fetchPromos();
   const deals = buildDeals(rawItems);
-  console.log(`[Drinxit] ${deals.length} deals gevonden`);
+  console.log(`[Drinxit] ${deals.length} deals gevonden (uit ${rawItems.length} items over ${PROMO_URLS.length} subdomains)`);
   if (deals.length === 0) {
-    if (diag?.emptyState) {
-      console.warn("[Drinxit] Site meldt expliciet 'geen promoties' — geen fout, cache behouden");
-      return { count: 0, emptyState: true, diag };
+    if (emptyState) {
+      console.warn("[Drinxit] Alle subdomains melden 'geen promoties' — geen fout, cache behouden");
+      return { count: 0, emptyState: true };
     }
     console.warn("[Drinxit] 0 deals gevonden — Supabase niet overschreven");
-    return { count: 0, diag };
+    return { count: 0 };
   }
   await supabaseWrite(deals);
   return { count: deals.length };

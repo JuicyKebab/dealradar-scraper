@@ -351,8 +351,7 @@ app.post("/scrape-bioplanet", async (req, res) => {
   try {
     const result = await scrapeBioplanet();
     const durationMs = Date.now() - t;
-    const errors = result.total === 0 && result.diag ? [`0 deals after retry - title: ${result.diag.title}, url: ${result.diag.url}, cards: ${result.diag.cardCount}`] : [];
-    await logScrape({ source: "Bio-Planet", dealCount: result.total ?? 0, errors, durationMs }).catch(() => {});
+    await logScrape({ source: "Bio-Planet", dealCount: result.total ?? 0, errors: [], durationMs }).catch(() => {});
     res.json({ ok: true, ...result, scraped_at: new Date().toISOString() });
   } catch (err) {
     const durationMs = Date.now() - t;
@@ -474,11 +473,17 @@ app.post("/probe-bioplanet", async (req, res) => {
 app.post("/scrape-colruyt-promos", async (req, res) => {
   const auth = req.headers.authorization;
   if (!CRON_SECRET || auth !== `Bearer ${CRON_SECRET}`) return res.status(401).json({ error: "Unauthorized" });
+  const t = Date.now();
   try {
     const result = await scrapeColruytPromos();
+    const durationMs = Date.now() - t;
+    const errors = result.ok === false ? [result.error || "scrape mislukt"] : [];
+    await logScrape({ source: "colruyt", dealCount: result.collected ?? 0, errors, durationMs }).catch(() => {});
     res.json(result);
   } catch (err) {
+    const durationMs = Date.now() - t;
     console.error("[server] scrapeColruytPromos failed:", err);
+    await logScrape({ source: "colruyt", dealCount: 0, errors: [err.message], durationMs }).catch(() => {});
     res.status(500).json({ ok: false, error: err.message });
   }
 });
