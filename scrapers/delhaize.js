@@ -193,6 +193,36 @@ const FETCH_HEADERS = {
 
 const BATCH_SIZE = 5;
 
+// Delhaize's Apollo-server eist sinds ~nov 2026 een X-Apollo-Operation-Name header
+// (400 OPERATION_NAME_HEADER_REQUIRED). De Brightdata residential proxy draait in
+// web-unlocker modus en STRIPT die custom header op POST (vervangt alle headers door
+// een eigen browser-fingerprint) -> de header bereikt Apollo nooit -> 0 deals.
+// Oplossing: DIRECT fetchen (header blijft intact); de proxy is enkel nog fallback voor
+// als delhaize.be het datacenter-IP zou blokkeren (de oorspronkelijke 2026-04 reden —
+// server geeft nu echter gewoon "Apache" terug, geen Cloudflare-block meer).
+let _warnedFetchMode = false;
+async function gqlFetch(body) {
+  const dispatchers = proxyDispatcher ? [null, proxyDispatcher] : [null];
+  let lastErr = null;
+  for (const dispatcher of dispatchers) {
+    try {
+      const res = await undiciFetch("https://www.delhaize.be/api/v1/", {
+        method: "POST",
+        headers: body.headers,
+        body: body.payload,
+        ...(dispatcher ? { dispatcher } : {}),
+      });
+      if (res.ok) {
+        if (dispatcher && !_warnedFetchMode) { _warnedFetchMode = true; console.log("[delhaize] direct geblokkeerd, via proxy"); }
+        return res;
+      }
+      lastErr = `HTTP ${res.status}`;
+    } catch (e) { lastErr = e.message; }
+  }
+  if (!_warnedFetchMode) { _warnedFetchMode = true; console.log(`[delhaize] fetch mislukt: ${lastErr}`); }
+  return null;
+}
+
 async function fetchDelhaizeProducts(lang) {
   const results = [];
   const queries = lang === "fr" ? QUERIES_FR : QUERIES_NL;
@@ -207,17 +237,15 @@ async function fetchDelhaizeProducts(lang) {
       const allProducts = [];
       for (let page = 0; page < 2; page++) {
         try {
-          const res = await undiciFetch("https://www.delhaize.be/api/v1/", {
-            method: "POST",
+          const res = await gqlFetch({
             headers,
-            body: JSON.stringify({
+            payload: JSON.stringify({
               operationName: "Search",
               query: GQL,
               variables: { lang, q, size: 40, page },
             }),
-            ...(proxyDispatcher ? { dispatcher: proxyDispatcher } : {}),
           });
-          if (!res.ok) break;
+          if (!res) break;
           const json = await res.json();
           const prods = (json?.data?.productSearch?.products || [])
             .filter(p => Array.isArray(p.potentialPromotions) && p.potentialPromotions.length > 0);
