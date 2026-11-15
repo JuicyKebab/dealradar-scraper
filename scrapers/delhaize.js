@@ -185,6 +185,10 @@ const FETCH_HEADERS = {
   "Accept": "application/json",
   "Origin": "https://www.delhaize.be",
   "Referer": "https://www.delhaize.be/nl/in-promo",
+  // Apollo CSRF-preventie (sinds ~nov 2026): server eist een operation-name header
+  // die matcht met operationName in de body, anders 400 OPERATION_NAME_HEADER_REQUIRED.
+  "X-Apollo-Operation-Name": "Search",
+  "Apollo-Require-Preflight": "true",
 };
 
 const BATCH_SIZE = 5;
